@@ -387,7 +387,7 @@ class LyricsResponse(BaseModel):
 app = FastAPI()
 scraper = LyricLocate()
 
-@app.get("/get_lyrics", response_model=LyricsResponse)
+@app.get("/api/get_lyrics", response_model=LyricsResponse)
 def get_lyrics(title: str, artist: str, language: Optional[str] = None, background_tasks: BackgroundTasks = None):
     # First check cache
     cached_lyrics = scraper.get_cached_data(title, artist, language)

@@ -1,6 +1,6 @@
 # demo a non-english song lyrics request + english translated lyrics request
 import requests
-endpoint = 'http://localhost:19999/get_lyrics'
+endpoint = 'http://localhost:19999/api/get_lyrics'
 
 params = {
     'title': 'Страсть к курению',
