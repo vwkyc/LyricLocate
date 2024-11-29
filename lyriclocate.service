@@ -1,15 +1,15 @@
 # systemd service template
-# REPLACE USER AND PATHS
+# REPLACE PLACEHOLDERS (YOUR_USER and YOUR_GROUP)
 [Unit]
 Description=LyricLocate Lyrics API
 After=network.target
 
 [Service]
-User=your_user
-Group=your_group
-WorkingDirectory=/path/to/lyriclocate
-EnvironmentFile=/path/to/lyriclocate/.env
-ExecStart=/path/to/lyriclocate/venv/bin/uvicorn main:app --host 0.0.0.0 --port 19999
+User=YOUR_USER
+Group=YOUR_GROUP
+WorkingDirectory=/home/YOUR_USER/lyriclocate/src
+EnvironmentFile=/home/YOUR_USER/lyriclocate/.env
+ExecStart=/home/YOUR_USER/lyriclocate/venv/bin/uvicorn main:app --host 0.0.0.0 --port 19999
 Restart=always
 
 [Install]
