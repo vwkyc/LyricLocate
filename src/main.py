@@ -217,6 +217,80 @@ class LyricLocate:
 
         return title_match_ratio > 0.6 and artist_match_ratio > 0.45
 
+    def clean_lyrics_text(self, lyrics: str) -> str:
+        """Clean up the lyrics by removing unnecessary spaces and newlines."""
+        if not lyrics:
+            return ""
+
+        # 1. Fix section headers with ampersands, handling possible Windows-style newlines
+        lyrics = re.sub(
+            r'\[\s*([^]]*?)\s*&\s*(?:\r?\n\s*)?([^]]*?)\s*\]',
+            r'[\1 & \2]',
+            lyrics
+        )
+        lyrics = re.sub(
+            r'\[([^]]+?):\s*([^]]+?)\s*&\s*(?:\r?\n\s*)?([^]]+?)\s*\]',
+            r'[\1: \2 & \3]',
+            lyrics
+        )
+
+        # 2. Remove any remaining newlines within square brackets
+        lyrics = re.sub(
+            r'\[([^\]]+?)\s*\r?\n\s*([^\]]+?)\]',
+            r'[\1 \2]',
+            lyrics
+        )
+
+        # 3. Clean up parentheses by removing newlines inside them
+        lyrics = re.sub(r'\(\s*\r?\n\s*', '(', lyrics)
+        lyrics = re.sub(r'\s*\r?\n\s*\)', ')', lyrics)
+        lyrics = re.sub(r'\s+\)', ')', lyrics)
+
+        # 4. Clean up square brackets by removing newlines inside them
+        lyrics = re.sub(r'\[\s*\r?\n\s*', '[', lyrics)
+        lyrics = re.sub(r'\s*\r?\n\s*\]', ']', lyrics)
+        lyrics = re.sub(r'\s+\]', ']', lyrics)
+
+        # 5. Fix exclamation marks followed by text without unwanted spaces
+        lyrics = re.sub(r'!\s*\r?\n\s*([A-Za-z])', r'! \1', lyrics)
+        lyrics = re.sub(r'!\s+([A-Za-z])', r'! \1', lyrics)
+
+        # 6. Normalize spacing around punctuation
+        lyrics = re.sub(r'\s*!\s*', '! ', lyrics)
+        lyrics = re.sub(r'¡\s+', '¡', lyrics)
+
+        # 7. Ensure punctuation followed by uppercase letters starts a new line,
+        # but avoid splitting when followed by '¡' to handle cases like "¡DY!"
+        lyrics = re.sub(r'([.!?])\s+(?!¡)([A-Z])', r'\1\n\2', lyrics)
+
+        # 8. Replace multiple newlines with double newlines (for paragraph spacing)
+        lyrics = re.sub(r'\n{2,}', '\n\n', lyrics)
+
+        # 9. Ensure there is a newline after section headers if missing
+        lyrics = re.sub(r']\s*([A-Za-z¡])', r']\n\1', lyrics)
+
+        # 10. Final cleanup: Remove any residual newlines within square brackets
+        lyrics = re.sub(
+            r'\[([^\]]+?)\]',
+            lambda m: '[' + m.group(1).replace('\n', ' ').replace('\r', ' ').strip() + ']',
+            lyrics
+        )
+
+        # 11. Remove any space before closing parentheses to fix cases like "(¡DY! )"
+        lyrics = re.sub(r'\(\s*', '(', lyrics)  # Remove space after '('
+        lyrics = re.sub(r'\s*\)', ')', lyrics)  # Remove space before ')'
+
+        # 12. Remove newlines before opening parentheses to keep parentheticals on the same line
+        lyrics = re.sub(r'\n\s*\(', ' (', lyrics)
+
+        # 13. Add spacing above bracketed sections like [Verse], [Chorus], etc.
+        lyrics = re.sub(r'(?<!\n)\n?\s*\[([^\]]+)\]', r'\n\n[\1]', lyrics)
+
+        # 14. Add spacing above and below [Instrumental] sections
+        lyrics = re.sub(r'\n\s*\[Instrumental\]\s*\n', r'\n\n[Instrumental]\n\n', lyrics)
+
+        return lyrics.strip()
+
     def scrape_lyrics(self, url) -> Optional[str]:
         if not url:
             return None
@@ -241,6 +315,7 @@ class LyricLocate:
                 return None
             
             lyrics = "\n".join([container.get_text(separator="\n").strip() for container in lyrics_containers])
+            lyrics = self.clean_lyrics_text(lyrics)
             return lyrics
         except Exception as e:
             logger.error(f"Error parsing lyrics from {url}: {e}")

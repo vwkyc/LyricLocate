@@ -4,6 +4,9 @@ cache/
 __pycache__/
 *.py[cod]
 *$py.class
+test/*.json
+test/*.html
+test/*.csv
 
 # C extensions
 *.so
