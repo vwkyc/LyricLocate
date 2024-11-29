@@ -11,13 +11,16 @@ import unidecode
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 import uvicorn
 from typing import Optional
 from pydantic import BaseModel
 import threading
 
 # Load environment variables from .env file
-dotenv_path = find_dotenv("../.env")
+dotenv_path = find_dotenv(".env")
 if not dotenv_path:
     raise FileNotFoundError("Could not find .env file")
 load_dotenv(dotenv_path)
@@ -390,7 +393,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 class LyricsResponse(BaseModel):
     title: str
     artist: str
@@ -398,6 +400,13 @@ class LyricsResponse(BaseModel):
     lyrics: str
 
 scraper = LyricLocate()
+
+STATIC_DIR = Path(__file__).parent.parent / "static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    return FileResponse(STATIC_DIR / "index.html")
 
 @app.get("/api/get_lyrics", response_model=LyricsResponse)
 def get_lyrics(title: str, artist: str, language: Optional[str] = None, background_tasks: BackgroundTasks = None):

@@ -10,7 +10,6 @@ document.getElementById('lyricsForm').addEventListener('submit', async function(
       return;
     }
   
-    // Update UI to loading state
     lyricsDiv.textContent = 'Fetching lyrics...';
     submitButton.disabled = true;
   
