@@ -10,6 +10,7 @@ import re
 import unidecode
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from typing import Optional
 from pydantic import BaseModel
@@ -385,6 +386,15 @@ class LyricsResponse(BaseModel):
     lyrics: str
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://lyriclocate.kmst.me"],
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["Accept", "Content-Type"],
+)
+
 scraper = LyricLocate()
 
 @app.get("/api/get_lyrics", response_model=LyricsResponse)

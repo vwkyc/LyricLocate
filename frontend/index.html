@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>LyricLocate Lyrics Finder</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>LyricLocate</h1>
+        <nav>
+            <a href="#home">Home</a>
+            <a href="#api">API Docs</a>
+        </nav>
+    </header>
+    <main>
+        <section class="container" id="home">
+            <h2>Find Song Lyrics</h2>
+            <form id="lyricsForm">
+                <div class="input-group">
+                    <label for="title">Song Title:</label>
+                    <input type="text" id="title" placeholder="Enter song title" required>
+                </div>
+                <div class="input-group">
+                    <label for="artist">Artist:</label>
+                    <input type="text" id="artist" placeholder="Enter artist name" required>
+                </div>
+                <button type="submit">Get Lyrics</button>
+            </form>
+            <div id="lyrics"></div>
+        </section>
+        <section class="container" id="api">
+            <h2>API Documentation</h2>
+            <p>The LyricLocate Lyrics API allows you to fetch song lyrics via HTTP requests.</p>
+            <h3>Endpoint</h3>
+            <p><code>GET /api/get_lyrics</code></p>
+            <h3>Query Parameters</h3>
+            <ul>
+                <li><code>title</code> (string, required): The title of the song.</li>
+                <li><code>artist</code> (string, required): The artist of the song.</li>
+                <li><code>language</code> (string, optional): The language of the lyrics. Default is <code>original</code>. Only <code>en</code> is supported for translated lyrics.</li>
+            </ul>
+            <h3>Responses</h3>
+            <p><strong>200 OK</strong> - Returns the lyrics of the song.</p>
+            <pre>{
+  "title": "Song Title",
+  "artist": "Artist Name",
+  "language": "Language",
+  "lyrics": "Lyrics text here..."
+}</pre>
+            <p><strong>404 Not Found</strong> - Lyrics not found.</p>
+            <h3>Example Request</h3>
+            <pre>GET https://LyricLocate.kmst.me/api/get_lyrics?title=Shape+of+You&artist=Ed+Sheeran</pre>
+        </section>
+    </main>
+    <footer>
+        <a href="https://github.com/vwkyc/LyricLocate">LyricLocate by @vwykc</a>
+    </footer>
+    <script src="script.js"></script>
+</body>
+</html>
