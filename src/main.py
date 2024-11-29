@@ -385,9 +385,9 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://LyricLocate.kmst.me"],
+    allow_origins=["https://lyriclocate.kmst.me"],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
