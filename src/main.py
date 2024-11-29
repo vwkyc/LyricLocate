@@ -70,7 +70,7 @@ class LyricLocate:
             logger.warning("GENIUS_CLIENT_ACCESS_TOKEN environment variable not set. Genius API will not work.")
         self.genius_headers = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
         self.google_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.140 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/'
         }
@@ -139,7 +139,7 @@ class LyricLocate:
     def clean_artist(artist):
         return [name.strip() for name in re.split(r'[;,]', artist)] if artist else []
 
-    def find_genius_url(self, title, artist, language=None) -> Optional[str]:
+    def find_url_on_genius(self, title, artist, language=None) -> Optional[str]:
         if not self.api_key:
             return None
         search_url = "https://api.genius.com/search"
@@ -232,7 +232,7 @@ class LyricLocate:
             logger.error(f"Error parsing lyrics from {url}: {e}")
             return None
 
-    def search_and_scrape_genius_google(self, title: str, artist: str, language: str = None) -> Optional[str]:
+    def gplusg_search_and_scrape(self, title: str, artist: str, language: str = None) -> Optional[str]:
         query = f"{title} {artist} genius.com lyrics"
         if language and language.lower() == 'en':
             query += ' english translation'
@@ -261,7 +261,7 @@ class LyricLocate:
                         logger.info(f"Found Genius link via Google: {genius_url}")
 
                         lyrics = self.scrape_lyrics(genius_url)
-                        if lyrics and self.verify_genius_google_artist_and_title(genius_url, artist, title):
+                        if lyrics and self.verify_gplusg_artist_and_title(genius_url, artist, title):
                             logger.info(f"Verified artist and title match for '{artist}' and '{title}'")
                             return lyrics
                         else:
@@ -274,7 +274,7 @@ class LyricLocate:
         
         return None
 
-    def verify_genius_google_artist_and_title(self, url: str, expected_artist: str, expected_title: str) -> bool:
+    def verify_gplusg_artist_and_title(self, url: str, expected_artist: str, expected_title: str) -> bool:
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -312,8 +312,6 @@ class LyricLocate:
             f"{clean_title} {clean_artists[0]} lyrics",
             f"{clean_title} lyrics"
         ]
-        if language and language.lower() == 'en':
-            queries = [q + ' english translation' for q in queries]
 
         for query in queries:
             lyrics = self.scrape_google_lyrics(query, artist_verification=(query == queries[1]), artist=artist)
@@ -325,37 +323,79 @@ class LyricLocate:
     def scrape_google_lyrics(self, query: str, artist_verification: bool, artist: str = None) -> Optional[str]:
         url = "https://www.google.com/search"
         params = {**self.google_params, 'q': query}
+        
+        # Add logging for search URL and query with proper URL encoding
+        import urllib.parse
+        search_url = f"{url}?{urllib.parse.urlencode(params)}"
+        logger.info(f"Performing Google search with URL: {search_url}")
+        logger.info(f"Search query: {query}")
+        
         exclude_keywords = ["Spotify", "YouTube", "Album"]
         try:
             response = requests.get(url, headers=self.google_headers, params=params)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-        
-            artist_found = False
-            song_info = soup.select_one('div.PZPZlf[data-attrid="subtitle"]')
-            if song_info:
-                song_info_text = song_info.text.lower()
-                if artist_verification and artist:
-                    artist_names = [name.strip().lower() for name in artist.split(',')]
-                    if any(name in song_info_text for name in artist_names):
-                        artist_found = True
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
             
-            if artist_verification and not artist_found:
-                logger.warning(f"Artist verification failed for '{artist}'")
-                return None
+                artist_found = False
+                song_info = soup.select_one('div.PZPZlf[data-attrid="subtitle"]')
+                if song_info:
+                    song_info_text = song_info.text.lower()
+                    if artist_verification and artist:
+                        artist_names = [name.strip().lower() for name in artist.split(',')]
+                    
+                        if any(name in song_info_text for name in artist_names):
+                            artist_found = True
+                        else:
+                            logging.info(f"Artist not found in subtitle. Checking About section.")
+                
+                if not artist_found and artist_verification and artist:
+                    about_section = soup.find('span', class_='mgAbYb OSrXXb RES9jf pb3iw', string='About')
+                    if about_section:
+                        about_content = about_section.find_next('div', class_='PZPZlf')
+                        if about_content:
+                            about_text = about_content.get_text().lower()
+                            if any(name.lower() in about_text for name in artist.split(',')):
+                                logging.info(f"Artist '{artist}' found in About section")
+                                artist_found = True
+                            else:
+                                logging.warning(f"Artist '{artist}' not found in About section")
+                
+                if not artist_found and artist_verification:
+                    logging.warning(f"Found lyrics, but they don't match the artist: {artist}. Lyrics won't be saved.")
+                    return None
 
-            selectors = ['div.ujudUb', 'div.PZPZlf', 'div[data-lyricid]', 'div.PZPZlf.zloOqf']
-                         
-            for selector in selectors:
-                lyrics_divs = soup.select(selector)
-                if lyrics_divs:
-                    lyrics = '\n'.join([div.get_text(separator='\n') for div in lyrics_divs])
-                    if len(lyrics.split('\n')) > 4:
-                        return lyrics.strip()
-            
-            logger.warning(f"No lyrics found for {query}")
+                selectors = ['div.ujudUb', 'div.PZPZlf', 'div[data-lyricid]', 'div.PZPZlf.zloOqf']
+                             
+                for selector in selectors:
+                    lyrics_divs = soup.select(selector)
+                    if lyrics_divs:
+                        lyrics = '\n'.join([div.get_text(separator='\n') for div in lyrics_divs])
+                        if len(lyrics.split('\n')) > 4:
+                            lines = lyrics.split('\n')
+                            youtube_count = sum(1 for line in lines if 'YouTube' in line)
+
+                            yt_count_exceeded = youtube_count >= 2
+                            r_keywords = all(keyword.lower() in lyrics.lower() for keyword in exclude_keywords)
+                            r_genius_and_youtube = "Genius Lyrics" in lyrics and "YouTube" in lyrics
+                            r_official_lyric_video = "Official Lyric Video" in lyrics
+                            r_youtube_and_shazam = "YouTube" in lyrics and "Shazam" in lyrics
+                            r_youtube_mentions = any('YouTube' in lines[i] and 'YouTube' in lines[i+1] for i in range(len(lines) - 1))
+                            r_youtube_in_first_three_lines = any(line.strip().endswith('YouTube') for line in lines[:3])
+                            r_wikipedia_lyrics_description = any(keyword.lower() in line.lower() for keyword in ["Wikipedia", "Lyrics", "Description"] for line in lines)
+                            r_contains_song_by = any(keyword.lower() in line.lower() for keyword in ["Artist", ":", "Song by"] for line in lines)
+
+                            if (
+                                yt_count_exceeded or r_keywords or r_genius_and_youtube or r_official_lyric_video or r_youtube_and_shazam or
+                                r_youtube_mentions or r_youtube_in_first_three_lines or r_wikipedia_lyrics_description or r_contains_song_by
+                            ):
+                                logging.warning(f"Excluded non-lyric content for {query} using selector {selector}")
+                                return None
+                            logging.debug(f"Lyrics found for {query} using selector {selector}")
+                            return lyrics.strip()                
+            else:
+                logging.error(f"Error fetching page: {response.status_code}")
         except requests.RequestException as e:
-            logger.error(f"Request failed: {e}")
+            logging.error(f"Request failed: {e}")
         return None
 
     def get_lyrics(self, title, artist, language=None):
@@ -363,8 +403,9 @@ class LyricLocate:
         if cached_lyrics:
             return cached_lyrics
 
+        # Search for lyrics first on Genius then if not found try google+genius then try Google search only
         lyrics = self.search_song(title, artist, language) or \
-                self.search_and_scrape_genius_google(title, artist, language) or \
+                self.gplusg_search_and_scrape(title, artist, language) or \
                 self.google_search(title, artist, language)
 
         if lyrics:
@@ -380,7 +421,7 @@ class LyricLocate:
         self.get_lyrics(title, artist, alternate_language)
 
     def search_song(self, title, artist, language=None):
-        url = self.find_genius_url(title, artist, language)
+        url = self.find_url_on_genius(title, artist, language)
         return self.scrape_lyrics(url) if url else None
 
 app = FastAPI()
