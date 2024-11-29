@@ -15,7 +15,7 @@ document.getElementById('lyricsForm').addEventListener('submit', async function(
     submitButton.disabled = true;
 
     try {
-        const response = await fetch(`https://LyricLocate.kmst.me/api/get_lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`, {
+        const response = await fetch(`/api/get_lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`, {
             method: 'GET',
             headers: {
                 'Accept': 'application/json'

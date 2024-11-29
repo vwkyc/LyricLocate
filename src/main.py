@@ -1,5 +1,5 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 import requests
 from bs4 import BeautifulSoup
 import logging
@@ -17,7 +17,10 @@ from pydantic import BaseModel
 import threading
 
 # Load environment variables from .env file
-load_dotenv("../.env")
+dotenv_path = find_dotenv("../.env")
+if not dotenv_path:
+    raise FileNotFoundError("Could not find .env file")
+load_dotenv(dotenv_path)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -378,22 +381,21 @@ class LyricLocate:
         url = self.find_genius_url(title, artist, language)
         return self.scrape_lyrics(url) if url else None
 
-# Define response model
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://LyricLocate.kmst.me"],
+    allow_credentials=True,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
 class LyricsResponse(BaseModel):
     title: str
     artist: str
     language: Optional[str]
     lyrics: str
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://lyriclocate.kmst.me"],
-    allow_credentials=False,
-    allow_methods=["GET"],
-    allow_headers=["Accept", "Content-Type"],
-)
 
 scraper = LyricLocate()
 
