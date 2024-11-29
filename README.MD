@@ -51,9 +51,8 @@ This project is a FastAPI-based service that fetches song lyrics from the web. I
    curl -X GET "http://localhost:19999/api/get_lyrics?title=Sleepless&artist=deadmau5"
    ```
    OR
-   ```sh
-   python demo.py
-   ```
+
+   front end [http://localhost:19999](http://localhost:19999)
 
 ## API Endpoints
 

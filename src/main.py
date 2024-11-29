@@ -10,7 +10,6 @@ import re
 import unidecode
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.responses import FileResponse
@@ -386,13 +385,6 @@ class LyricLocate:
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://lyriclocate.kmst.me"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 class LyricsResponse(BaseModel):
     title: str
     artist: str
