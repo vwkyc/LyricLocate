@@ -48,7 +48,7 @@ This project is a FastAPI-based service that fetches song lyrics from the web. I
 2. Fetch lyrics by making a GET request to the `/get_lyrics` endpoint with `title`, `artist`, and optional `language` query parameters:
 
    ```sh
-   curl -X GET "http://localhost:12345/get_lyrics?title=Sleepless&artist=deadmau5"
+   curl -X GET "http://localhost:19999/get_lyrics?title=Sleepless&artist=deadmau5"
    ```
    OR
    ```sh

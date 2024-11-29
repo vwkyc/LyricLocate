@@ -1,4 +1,5 @@
 import os
+from dotenv import load_dotenv
 import requests
 from bs4 import BeautifulSoup
 import logging
@@ -13,6 +14,9 @@ import uvicorn
 from typing import Optional
 from pydantic import BaseModel
 import threading
+
+# Load environment variables from .env file
+load_dotenv("../.env")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
