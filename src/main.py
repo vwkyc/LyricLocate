@@ -179,6 +179,30 @@ class LyricLocate:
 
     def is_match(self, hit, query_title, query_artists):
         result_title = self.clean_string(hit['result']['title'])
+        result_artist = self.clean_string(hit['result']['primary_artist']['name'])
+
+        # Check if title contains both artist and song title
+        title_without_paren = re.sub(r'\s*\([^)]*\)', '', result_title).strip()
+        query_artists_lower = [artist.lower() for artist in query_artists]
+        
+        # Check if any artist name is in the title and the query title is also in the title
+        artist_in_title = any(artist in title_without_paren for artist in query_artists_lower)
+        title_in_result = query_title.lower() in title_without_paren.lower()
+        
+        if artist_in_title and title_in_result:
+            logger.info("Combined artist and title found in result title. Bypassing ratio checks.")
+            return True
+
+        if result_artist in ["genius romanizations", "genius english translations"]:
+            artist_match_ratio = 1.0
+            logger.info("Skipping artist matching due to Genius Romanization/Translation")
+        else:
+            artist_match_ratio = max(
+                SequenceMatcher(None, query_artist, result_artist).ratio()
+                for query_artist in query_artists
+            )
+
+        # Only do detailed title matching if we haven't already matched based on combined title
         parenthetical_matches = re.findall(r'\((.*?)\)', result_title)
         paren_texts = [match.strip() for match in parenthetical_matches]
         result_title_no_paren = re.sub(r'\s*\(.*?\)', '', result_title).strip()
@@ -189,17 +213,7 @@ class LyricLocate:
             for title_variant in title_variants
         )
 
-        result_artist = self.clean_string(hit['result']['primary_artist']['name'])
-        artist_match_ratio = max(
-            SequenceMatcher(None, query_artist, result_artist).ratio()
-            for query_artist in query_artists
-        )
-
         logger.info(f"Result - Title: {hit['result']['title']}, Artist: {hit['result']['primary_artist']['name']}, Match - Title Ratio: {title_match_ratio}, Artist Ratio: {artist_match_ratio}")
-
-        if result_artist in ["genius romanizations", "genius english translations"]:
-            artist_match_ratio = 1.0
-            logger.info("Skipping matching due to Genius Romanization/Translation")
 
         return title_match_ratio > 0.6 and artist_match_ratio > 0.45
 
@@ -398,15 +412,25 @@ class LyricLocate:
             logging.error(f"Request failed: {e}")
         return None
 
-    def get_lyrics(self, title, artist, language=None):
+    def is_lyrics_in_english(self, lyrics: str) -> bool:
+        """Determine if the lyrics are predominantly in English."""
+        if not lyrics:
+            return False
+        num_ascii = sum(1 for c in lyrics if ord(c) < 128)
+        return (num_ascii / len(lyrics)) > 0.9
+
+    def get_lyrics(self, title, artist, language=None, skip_google_search=False):
         cached_lyrics = self.get_cached_data(title, artist, language)
         if cached_lyrics:
             return cached_lyrics
 
-        # Search for lyrics first on Genius then if not found try google+genius then try Google search only
+        # Try Genius first, then google+genius
         lyrics = self.search_song(title, artist, language) or \
-                self.gplusg_search_and_scrape(title, artist, language) or \
-                self.google_search(title, artist, language)
+                 self.gplusg_search_and_scrape(title, artist, language)
+        
+        # Conditionally add google_search
+        if not skip_google_search:
+            lyrics = lyrics or self.google_search(title, artist, language)
 
         if lyrics:
             self.save_to_cache(title, artist, lyrics, language)
@@ -415,10 +439,12 @@ class LyricLocate:
         # Return a placeholder string if no lyrics found
         return "Lyrics not found"
 
-    def fetch_and_cache_alternate(self, title, artist, language):
-        alternate_language = None if language and language.lower() == 'en' else 'EN'
-        # Fetch and cache the alternate lyrics without returning them
-        self.get_lyrics(title, artist, alternate_language)
+    def search_fetch_and_cache_alternate(self, title, artist, language):
+        alternate_language = 'en'
+        # Fetch and cache the alternate lyrics without using google_search
+        alternate_lyrics = self.get_lyrics(title, artist, alternate_language, skip_google_search=True)
+        if alternate_lyrics:
+            self.save_to_cache(title, artist, alternate_lyrics, alternate_language)
 
     def search_song(self, title, artist, language=None):
         url = self.find_url_on_genius(title, artist, language)
@@ -451,8 +477,11 @@ def get_lyrics(title: str, artist: str, language: Optional[str] = None, backgrou
     # If not in cache, fetch fresh lyrics
     lyrics = scraper.get_lyrics(title, artist, language)
     if lyrics and lyrics != "Lyrics not found":
-        if background_tasks:
-            background_tasks.add_task(scraper.fetch_and_cache_alternate, title, artist, language)
+        is_english = scraper.is_lyrics_in_english(lyrics)
+        # Only add background task if lyrics are not in English and language is not specified
+        if not is_english and language is None:
+            if background_tasks:
+                background_tasks.add_task(scraper.search_fetch_and_cache_alternate, title, artist, language)
         return LyricsResponse(title=title, artist=artist, language=language or "original", lyrics=lyrics)
     else:
         raise HTTPException(status_code=404, detail="Lyrics not found")
