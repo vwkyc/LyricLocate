@@ -107,7 +107,7 @@ class LyricLocate:
                 """.format(self.EXPIRY_DAYS), (cache_key, language))
             result = cursor.fetchone()
             if result:
-                logger.info(f"Cache hit for {title} by {artist} with language {language}")
+                logger.info(f"Cache hit for '{title}' by '{artist}' with language '{language}'")
                 return result[0]
         return None
 
@@ -168,56 +168,64 @@ class LyricLocate:
                 logger.info(f"Search results from Genius for '{title}': {[hit['result']['title'] for hit in hits]}")
 
                 for hit in hits:
-                    if self.is_match(hit, query_title, query_artists):
+                    extracted_artist = hit['result']['primary_artist']['name']
+                    extracted_title = hit['result']['title']
+                    if self.is_match(extracted_artist, extracted_title, artist, title):
                         logger.info(f"Match found for '{title}' by '{artist}'")
                         return hit['result']['url']
 
-                logger.warning(f"No valid match found for '{title}' by '{artist}'")
+                logger.warning(f"No valid match found for '{title}' by '{artist}' on Genius")
             else:
-                logger.warning(f"No results found for {title} by {artist}")
+                logger.warning(f"No results found for {title} by {artist} on Genius")
         except requests.RequestException as e:
             logger.error(f"Request failed: {e}")
         return None
 
-    def is_match(self, hit, query_title, query_artists):
-        result_title = self.clean_string(hit['result']['title'])
-        result_artist = self.clean_string(hit['result']['primary_artist']['name'])
+    def is_match(self, extracted_artist: str, extracted_title: str, expected_artist: str, expected_title: str) -> bool:
+        try:
+            logger.info(f"Comparing extracted artist: '{extracted_artist}', extracted title: '{extracted_title}' with expected artist: '{expected_artist}', expected title: '{expected_title}'")
+            # Use the same matching logic as before
+            query_artists = [name.strip() for name in re.split(r'[;,]', expected_artist)]
+            query_title = self.clean_title(expected_title)
 
-        # Check if title contains both artist and song title
-        title_without_paren = re.sub(r'\s*\([^)]*\)', '', result_title).strip()
-        query_artists_lower = [artist.lower() for artist in query_artists]
-        
-        # Check if any artist name is in the title and the query title is also in the title
-        artist_in_title = any(artist in title_without_paren for artist in query_artists_lower)
-        title_in_result = query_title.lower() in title_without_paren.lower()
-        
-        if artist_in_title and title_in_result:
-            logger.info("Combined artist and title found in result title. Bypassing ratio checks.")
-            return True
+            # Check if title contains both artist and song title
+            title_without_paren = re.sub(r'\s*\([^)]*\)', '', extracted_title).strip()
+            
+            # Check if any artist name is in the title and the query title is also in the title
+            artist_in_title = any(artist.lower() in title_without_paren.lower() for artist in query_artists)
+            title_in_result = query_title.lower() in title_without_paren.lower()
+            
+            if artist_in_title and title_in_result:
+                logger.info("Combined artist and title found in result title. Bypassing ratio checks.")
+                return True
 
-        if result_artist in ["genius romanizations", "genius english translations"]:
-            artist_match_ratio = 1.0
-            logger.info("Skipping artist matching due to Genius Romanization/Translation")
-        else:
-            artist_match_ratio = max(
-                SequenceMatcher(None, query_artist, result_artist).ratio()
-                for query_artist in query_artists
+            if extracted_artist.lower() in ["genius romanizations", "genius english translations"]:
+                artist_match_ratio = 1.0
+                logger.info("Skipping artist matching due to Genius Romanization/Translation")
+            else:
+                artist_match_ratio = max(
+                    SequenceMatcher(None, query_artist.lower(), extracted_artist.lower()).ratio()
+                    for query_artist in query_artists
+                )
+
+            # Title matching with variants
+            parenthetical_matches = re.findall(r'\((.*?)\)', extracted_title)
+            paren_texts = [match.strip() for match in parenthetical_matches]
+            result_title_no_paren = re.sub(r'\s*\(.*?\)', '', extracted_title).strip()
+            title_variants = [result_title_no_paren] + paren_texts + [extracted_title]
+
+            title_match_ratio = max(
+                SequenceMatcher(None, query_title.lower(), variant.lower()).ratio()
+                for variant in title_variants
             )
 
-        # Only do detailed title matching if we haven't already matched based on combined title
-        parenthetical_matches = re.findall(r'\((.*?)\)', result_title)
-        paren_texts = [match.strip() for match in parenthetical_matches]
-        result_title_no_paren = re.sub(r'\s*\(.*?\)', '', result_title).strip()
-        title_variants = [result_title_no_paren] + paren_texts + [result_title]
+            logger.info(f"Title match ratio: {title_match_ratio:.3f}, Artist match ratio: {artist_match_ratio:.3f}")
+            
+            return title_match_ratio > 0.6 and artist_match_ratio > 0.45
 
-        title_match_ratio = max(
-            SequenceMatcher(None, query_title, title_variant).ratio()
-            for title_variant in title_variants
-        )
-
-        logger.info(f"Result - Title: {hit['result']['title']}, Artist: {hit['result']['primary_artist']['name']}, Match - Title Ratio: {title_match_ratio}, Artist Ratio: {artist_match_ratio}")
-
-        return title_match_ratio > 0.6 and artist_match_ratio > 0.45
+        except Exception as e:
+            logger.error(f"Error in is_match: {e}")
+            return False
 
     def clean_lyrics_text(self, lyrics: str) -> str:
         """Clean up the lyrics by removing unnecessary spaces and newlines."""
@@ -352,48 +360,59 @@ class LyricLocate:
                         logger.info(f"Found Genius link via Google: {genius_url}")
 
                         lyrics = self.scrape_lyrics(genius_url)
-                        if lyrics and self.verify_gplusg_artist_and_title(genius_url, artist, title):
-                            logger.info(f"Verified artist and title match for '{artist}' and '{title}'")
-                            return lyrics
-                        else:
-                            logger.warning(f"Artist or title verification failed for '{artist}' and '{title}' on {genius_url}")
-                            break
+                        if lyrics:
+                            # Extract artist and title from the Genius page
+                            try:
+                                response_genius = requests.get(genius_url)
+                                response_genius.raise_for_status()
+                                soup_genius = BeautifulSoup(response_genius.text, 'html.parser')
+
+                                # Define selectors
+                                artist_selectors = [
+                                    '.HeaderArtistAndTracklistdesktop__ListArtists-sc-4vdeb8-1',
+                                    'a[class*="Artist"]',
+                                    '[data-testid="artist-name"]',
+                                ]
+
+                                title_selectors = [
+                                    '.SongHeaderdesktop__HiddenMask-sc-1effuo1-11',
+                                    'h1[class*="Title"]',
+                                    '[data-testid="song-title"]',
+                                ]
+
+                                # Get genius artist and title
+                                genius_artist = None
+                                genius_title = None
+
+                                for selector in artist_selectors:
+                                    artist_elem = soup_genius.select_one(selector)
+                                    if artist_elem:
+                                        genius_artist = artist_elem.get_text().strip()
+                                        logger.info(f"Found artist: '{genius_artist}' using selector: {selector}")
+                                        break
+
+                                for selector in title_selectors:
+                                    title_elem = soup_genius.select_one(selector)
+                                    if title_elem:
+                                        genius_title = title_elem.get_text().strip()
+                                        logger.info(f"Found title: '{genius_title}' using selector: {selector}")
+                                        break
+
+                                if genius_artist and genius_title:
+                                    if self.is_match(genius_artist, genius_title, artist, title):
+                                        logger.info(f"Verified artist and title match for '{artist}' and '{title}'")
+                                        return lyrics
+                                    else:
+                                        logger.warning(f"Artist or title verification failed for '{artist}' and '{title}' on {genius_url}")
+                            except requests.RequestException as e:
+                                logger.error(f"Request failed while verifying Genius page {genius_url}: {e}")
+                                continue
 
             logger.info(f"No valid Genius link found in Google results for '{title}' by '{artist}'")
         except requests.RequestException as e:
             logger.error(f"Request to Google search failed: {e}")
         
         return None
-
-    def verify_gplusg_artist_and_title(self, url: str, expected_artist: str, expected_title: str) -> bool:
-        try:
-            response = requests.get(url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            page_artist_elem = soup.find('a', class_=re.compile(r'[^ ]*Artist$'))
-            if page_artist_elem:
-                genius_artist = self.clean_string(page_artist_elem.get_text())
-                expected_artist_clean = self.clean_string(expected_artist)
-
-                artist_match_ratio = SequenceMatcher(None, genius_artist, expected_artist_clean).ratio()
-                logger.info(f"Genius artist: '{genius_artist}', Expected artist: '{expected_artist_clean}', Match ratio: {artist_match_ratio}")
-
-                page_title_elem = soup.find('h1', class_=re.compile(r'[^ ]*Title$'))
-                if page_title_elem:
-                    genius_title = self.clean_string(page_title_elem.get_text())
-                    expected_title_clean = self.clean_string(expected_title)
-
-                    title_match_ratio = SequenceMatcher(None, genius_title, expected_title_clean).ratio()
-                    logger.info(f"Genius title: '{genius_title}', Expected title: '{expected_title_clean}', Match ratio: {title_match_ratio}")
-
-                    return artist_match_ratio > 0.6 and title_match_ratio > 0.45
-
-            logger.error(f"Artist or title element not found on Genius page: {url}")
-        except requests.RequestException as e:
-            logger.error(f"Request failed during artist and title verification: {e}")
-        
-        return False
 
     def google_search(self, title: str, artist: str, language: str = None) -> Optional[str]:
         clean_title = self.clean_title(title)
@@ -437,7 +456,7 @@ class LyricLocate:
                         if any(name in song_info_text for name in artist_names):
                             artist_found = True
                         else:
-                            logging.info(f"Artist not found in subtitle. Checking About section.")
+                            logger.info(f"Artist not found in subtitle. Checking About section.")
                 
                 if not artist_found and artist_verification and artist:
                     about_section = soup.find('span', class_='mgAbYb OSrXXb RES9jf pb3iw', string='About')
@@ -446,13 +465,13 @@ class LyricLocate:
                         if about_content:
                             about_text = about_content.get_text().lower()
                             if any(name.lower() in about_text for name in artist.split(',')):
-                                logging.info(f"Artist '{artist}' found in About section")
+                                logger.info(f"Artist '{artist}' found in About section")
                                 artist_found = True
                             else:
-                                logging.warning(f"Artist '{artist}' not found in About section")
+                                logger.warning(f"Artist '{artist}' not found in About section")
                 
                 if not artist_found and artist_verification:
-                    logging.warning(f"Found lyrics, but they don't match the artist: {artist}. Lyrics won't be saved.")
+                    logger.warning(f"Found lyrics, but they don't match the artist: '{artist}'. Lyrics won't be saved.")
                     return None
 
                 selectors = ['div.ujudUb', 'div.PZPZlf', 'div[data-lyricid]', 'div.PZPZlf.zloOqf']
@@ -466,7 +485,7 @@ class LyricLocate:
                             youtube_count = sum(1 for line in lines if 'YouTube' in line)
 
                             yt_count_exceeded = youtube_count >= 2
-                            r_keywords = all(keyword.lower() in lyrics.lower() for keyword in exclude_keywords)
+                            r_keywords = any(keyword.lower() in lyrics.lower() for keyword in exclude_keywords)
                             r_genius_and_youtube = "Genius Lyrics" in lyrics and "YouTube" in lyrics
                             r_official_lyric_video = "Official Lyric Video" in lyrics
                             r_youtube_and_shazam = "YouTube" in lyrics and "Shazam" in lyrics
@@ -479,14 +498,14 @@ class LyricLocate:
                                 yt_count_exceeded or r_keywords or r_genius_and_youtube or r_official_lyric_video or r_youtube_and_shazam or
                                 r_youtube_mentions or r_youtube_in_first_three_lines or r_wikipedia_lyrics_description or r_contains_song_by
                             ):
-                                logging.warning(f"Excluded non-lyric content for {query} using selector {selector}")
+                                logger.warning(f"Excluded non-lyric content for '{query}' using selector '{selector}'")
                                 return None
-                            logging.debug(f"Lyrics found for {query} using selector {selector}")
+                            logger.debug(f"Lyrics found for '{query}' using selector '{selector}'")
                             return lyrics.strip()                
             else:
-                logging.error(f"Error fetching page: {response.status_code}")
+                logger.error(f"Error fetching page: {response.status_code}")
         except requests.RequestException as e:
-            logging.error(f"Request failed: {e}")
+            logger.error(f"Request failed: {e}")
         return None
 
     def is_lyrics_in_english(self, lyrics: str) -> bool:
