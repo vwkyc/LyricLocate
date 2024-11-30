@@ -231,7 +231,7 @@ class LyricLocate:
             logger.error(f"Genius search failed: {e}")
         return None
 
-    def find_genius_url_using_google_if_no_genius_api(self, title: str, artist: str, language: str = None) -> Optional[str]:
+    def find_genius_url_using_google_if_no_genius_api(self, title: str, artist: str, language: str = None, initial_genius_url: str = None) -> Optional[str]:
         query = f"{title} {artist} genius.com lyrics"
         if language and language.lower() == 'en':
             query += ' english translation'
@@ -247,7 +247,11 @@ class LyricLocate:
                     link_match = re.search(r'(https?://genius\.com/[^\s&]+)', link)
                     if link_match:
                         url = link_match.group()
-                        # Extract artist and title from the URL
+
+                        if initial_genius_url and url == initial_genius_url:
+                            logger.info("Found same URL as Genius API - skipping verification")
+                            return None
+
                         match = re.match(r'https?://genius\.com/(?P<extracted_artist>[^/]+)-(?P<extracted_title>[^/]+)-lyrics', url)
                         if match:
                             extracted_artist = match.group('extracted_artist').replace('-', ' ').title()
@@ -310,14 +314,24 @@ class LyricLocate:
         if cached:
             logger.info("Returning cached lyrics.")
             return cached
-        lyrics = self.search_song(title, artist, language) or \
-                 self.find_genius_url_using_google_if_no_genius_api(title, artist, language) or \
-                 (self.google_search(title, artist, language) if not skip_google_search else None)
+
+        genius_url = self.find_url_on_genius(title, artist, language)
+        lyrics = self.scrape_lyrics(genius_url) if genius_url else None
+
+        if not lyrics:
+            google_genius_result = self.find_genius_url_using_google_if_no_genius_api(title, artist, language, initial_genius_url=genius_url)
+            if google_genius_result:
+                lyrics = google_genius_result
+
+        if not lyrics and not skip_google_search:
+            lyrics = self.google_search(title, artist, language)
+
         if lyrics:
             if should_cache:
                 self.save_to_cache(title, artist, lyrics, language)
                 logger.info("Lyrics retrieved and cached successfully.")
             return lyrics
+
         logger.warning("Lyrics not found.")
         return "Lyrics not found"
 
