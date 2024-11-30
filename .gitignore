@@ -4,9 +4,9 @@ cache/
 __pycache__/
 *.py[cod]
 *$py.class
-test/*.json
-test/*.html
-test/*.csv
+misc/*.json
+misc/*.html
+misc/*.csv
 legacy.py
 
 # C extensions
