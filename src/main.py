@@ -66,7 +66,7 @@ class LyricLocate:
             logger.warning("GENIUS_CLIENT_ACCESS_TOKEN not set. Genius API will not work.")
         self.genius_headers = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
         self.google_headers = {
-            'User-Agent': 'Mozilla/5.0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.140 Safari/537.36',
             'Accept-Language': 'en-US,en;q=0.9',
             'Referer': 'https://www.google.com/'
         }
@@ -152,7 +152,7 @@ class LyricLocate:
             logger.error(f"Error in is_match: {e}")
             return False
 
-    def clean_lyrics_text(self, lyrics: str) -> str:
+    def reformat_lyrics_text(self, lyrics: str) -> str:
         patterns = [
             (r'\[\s*([^]]*?)\s*&\s*(?:\r?\n\s*)?([^]]*?)\s*\]', r'[\1 & \2]'),
             (r'\[([^]]+?):\s*([^]]+?)\s*&\s*(?:\r?\n\s*)?([^]]+?)\s*\]', r'[\1: \2 & \3]'),
@@ -198,7 +198,7 @@ class LyricLocate:
                 return None
             lyrics = "\n".join([container.get_text(separator="\n").strip() for container in lyrics_containers])
             logger.info("Lyrics scraped successfully.")
-            return self.clean_lyrics_text(lyrics)
+            return self.reformat_lyrics_text(lyrics)
         except requests.RequestException as e:
             logger.error(f"Error scraping lyrics from {url}: {e}")
             return None
@@ -295,7 +295,7 @@ class LyricLocate:
                 if len(lyrics.split('\n')) > 4:
                     if not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
                         logger.info("Valid lyrics found in Google search results.")
-                        return self.clean_lyrics_text(lyrics)
+                        return self.reformat_lyrics_text(lyrics)
         except requests.RequestException as e:
             logger.error(f"Google scrape failed: {e}")
         return None
@@ -332,7 +332,6 @@ class LyricLocate:
                 logger.info("Lyrics retrieved and cached successfully.")
             return lyrics
 
-        logger.warning("Lyrics not found.")
         return "Lyrics not found"
 
     def search_song(self, title: str, artist: str, language: str = None) -> Optional[str]:
