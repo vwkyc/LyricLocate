@@ -18,18 +18,20 @@ from typing import Optional
 from pydantic import BaseModel
 import threading
 
-# Load environment variables from .env file
-dotenv_path = find_dotenv(".env")
-if not dotenv_path:
-    raise FileNotFoundError("Could not find .env file")
-load_dotenv(dotenv_path)
-
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Load environment variables from .env file
+dotenv_path = find_dotenv(".env")
+if dotenv_path:
+    load_dotenv(dotenv_path)
+    logger.info("Loaded environment variables from .env")
+else:
+    logger.warning("No .env file found. It's recommended to provide a GENIUS_CLIENT_ACCESS_TOKEN environment variable for full functionality.")
+
 class LyricsDatabase:
     """Handles all database operations for lyrics caching"""
-    
+
     def __init__(self, db_path=None):
         """Initialize database connection and create tables"""
         if db_path is None:
