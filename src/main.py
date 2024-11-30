@@ -129,6 +129,7 @@ class LyricLocate:
             title_in_result = query_title.lower() in title_no_paren.lower()
 
             if artist_in_title and title_in_result:
+                logger.info("Direct match found based on artist in title and title in result.")
                 return True
 
             if extracted_artist.lower() in ["genius romanizations", "genius english translations"]:
@@ -141,7 +142,12 @@ class LyricLocate:
 
             title_match_ratio = max(SequenceMatcher(None, query_title.lower(), variant.lower()).ratio() for variant in variants)
 
-            return title_match_ratio > 0.6 and artist_match_ratio > 0.45
+            if title_match_ratio > 0.6 and artist_match_ratio > 0.45:
+                logger.info(f"Match found with title ratio {title_match_ratio} and artist ratio {artist_match_ratio}.")
+                return True
+            else:
+                logger.info(f"No sufficient match. Title ratio: {title_match_ratio}, Artist ratio: {artist_match_ratio}.")
+                return False
         except Exception as e:
             logger.error(f"Error in is_match: {e}")
             return False
@@ -176,7 +182,9 @@ class LyricLocate:
 
     def scrape_lyrics(self, url: str) -> Optional[str]:
         if not url:
+            logger.info("No URL provided for scraping lyrics.")
             return None
+        logger.info(f"Scraping lyrics from URL: {url}")
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -184,9 +192,12 @@ class LyricLocate:
             lyrics_containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
             if not lyrics_containers:
                 if soup.find("div", string="This song is an instrumental"):
+                    logger.info("The song is instrumental.")
                     return "This song is an instrumental"
+                logger.warning("Lyrics containers not found.")
                 return None
             lyrics = "\n".join([container.get_text(separator="\n").strip() for container in lyrics_containers])
+            logger.info("Lyrics scraped successfully.")
             return self.clean_lyrics_text(lyrics)
         except requests.RequestException as e:
             logger.error(f"Error scraping lyrics from {url}: {e}")
@@ -194,31 +205,37 @@ class LyricLocate:
 
     def find_url_on_genius(self, title: str, artist: str, language: str = None) -> Optional[str]:
         if not self.api_key:
+            logger.info("Genius API key not provided. Skipping Genius API search.")
             return None
         search_url = "https://api.genius.com/search"
         query = f"{title} {artist}"
         if language and language.lower() == 'en':
             query += ' english translation'
+        logger.info(f"Searching Genius API for: {query}")
         params = {'q': query}
         try:
             response = requests.get(search_url, headers=self.genius_headers, params=params)
             if response.status_code == 429:
-                logger.error("Genius API rate limit exceeded")
+                logger.error("Genius API rate limit exceeded.")
                 return None
             response.raise_for_status()
             hits = response.json().get("response", {}).get("hits", [])
+            logger.info(f"Genius API returned {len(hits)} hits.")
             for hit in hits:
                 result = hit['result']
                 if self.is_match(result['primary_artist']['name'], result['title'], artist, title):
+                    logger.info(f"Matching lyrics found on Genius: {result['url']}")
                     return result['url']
+            logger.info("No matching lyrics found on Genius.")
         except requests.RequestException as e:
             logger.error(f"Genius search failed: {e}")
         return None
 
-    def find_url_on_genius_using_google_if_no_genius_api(self, title: str, artist: str, language: str = None) -> Optional[str]:
+    def find_genius_url_using_google_if_no_genius_api(self, title: str, artist: str, language: str = None) -> Optional[str]:
         query = f"{title} {artist} genius.com lyrics"
         if language and language.lower() == 'en':
             query += ' english translation'
+        logger.info(f"Searching Genius via Google for: {query}")
         params = {**self.google_params, 'q': query}
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
@@ -227,11 +244,13 @@ class LyricLocate:
             for a in soup.select('a[href]'):
                 link = a['href']
                 if "genius.com" in link:
-                    link = re.search(r'(https?://genius\.com/[^\s&]+)', link)
-                    if link:
-                        lyrics = self.scrape_lyrics(link.group())
+                    link_match = re.search(r'(https?://genius\.com/[^\s&]+)', link)
+                    if link_match:
+                        lyrics = self.scrape_lyrics(link_match.group())
                         if lyrics:
+                            logger.info("Lyrics found via Google search on Genius.")
                             return lyrics
+            logger.info("No lyrics found via Google search on Genius.")
         except requests.RequestException as e:
             logger.error(f"Google search failed: {e}")
         return None
@@ -242,12 +261,16 @@ class LyricLocate:
             f"{self.clean_title(title)} lyrics"
         ]
         for query in queries:
+            logger.info(f"Performing Google search with query: '{query}'")
             lyrics = self.scrape_google_lyrics(query, artist_verification=(query == queries[1]), artist=artist)
             if lyrics:
+                logger.info("Lyrics found via Google search.")
                 return lyrics
+        logger.info("No lyrics found via Google search.")
         return None
 
     def scrape_google_lyrics(self, query: str, artist_verification: bool, artist: str = None) -> Optional[str]:
+        logger.info(f"Scraping Google lyrics with query: '{query}'")
         params = {**self.google_params, 'q': query}
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
@@ -255,12 +278,15 @@ class LyricLocate:
             soup = BeautifulSoup(response.text, 'html.parser')
             if artist_verification and artist:
                 if not any(name.lower() in soup.text.lower() for name in self.clean_artists(artist)):
+                    logger.info("Artist verification failed in Google search results.")
                     return None
             for div in soup.select('div.ujudUb, div.PZPZlf, div[data-lyricid]'):
                 lyrics = div.get_text(separator='\n').strip()
                 if len(lyrics.split('\n')) > 4:
                     if not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
+                        logger.info("Valid lyrics found in Google search results.")
                         return self.clean_lyrics_text(lyrics)
+            logger.info("No valid lyrics found in Google search results.")
         except requests.RequestException as e:
             logger.error(f"Google scrape failed: {e}")
         return None
@@ -269,27 +295,46 @@ class LyricLocate:
         if not lyrics:
             return False
         num_ascii = sum(1 for c in lyrics if ord(c) < 128)
-        return (num_ascii / len(lyrics)) > 0.9
+        is_english = (num_ascii / len(lyrics)) > 0.9
+        logger.info(f"Lyrics are {'mostly' if is_english else 'not'} in English.")
+        return is_english
 
-    def get_lyrics(self, title: str, artist: str, language: str = None, skip_google_search: bool = False) -> str:
+    def get_lyrics(self, title: str, artist: str, language: str = None, skip_google_search: bool = False, should_cache: bool = False) -> str:
+        logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
         cached = self.get_cached_data(title, artist, language)
         if cached:
+            logger.info("Returning cached lyrics.")
             return cached
-        lyrics = self.search_song(title, artist, language) or (self.find_url_on_genius_using_google_if_no_genius_api(title, artist, language) if not skip_google_search else None) or (self.google_search(title, artist, language) if not skip_google_search else None)
+        lyrics = self.search_song(title, artist, language) or \
+                 self.find_genius_url_using_google_if_no_genius_api(title, artist, language) or \
+                 (self.google_search(title, artist, language) if not skip_google_search else None)
         if lyrics:
-            self.save_to_cache(title, artist, lyrics, language)
+            if should_cache:
+                self.save_to_cache(title, artist, lyrics, language)
+                logger.info("Lyrics retrieved and cached successfully.")
             return lyrics
+        logger.warning("Lyrics not found.")
         return "Lyrics not found"
 
     def search_song(self, title: str, artist: str, language: str = None) -> Optional[str]:
+        logger.info("Initiating search using Genius API.")
         url = self.find_url_on_genius(title, artist, language)
-        return self.scrape_lyrics(url) if url else None
+        if url:
+            logger.info("Genius API search successful.")
+            return self.scrape_lyrics(url)
+        else:
+            logger.info("Genius API search did not find any results.")
+            return None
 
     def search_fetch_and_cache_alternate(self, title: str, artist: str, language: str):
         alternate = 'en'
-        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=True)
-        if lyrics:
+        logger.info(f"Fetching and caching alternate language lyrics: '{alternate}'")
+        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=True, should_cache=False)
+        if lyrics and ("english" in title.lower() or "english" in artist.lower()):
             self.save_to_cache(title, artist, lyrics, alternate)
+            logger.info("Alternate language lyrics cached successfully.")
+        else:
+            logger.info("Alternate language lyrics do not contain 'english' in title or artist. Not caching.")
 
 app = FastAPI()
 scraper = LyricLocate()
@@ -309,15 +354,31 @@ async def read_root():
 
 @app.get("/api/get_lyrics", response_model=LyricsResponse)
 def get_lyrics_endpoint(title: str, artist: str, language: Optional[str] = None, background_tasks: BackgroundTasks = None):
+    logger.info(f"API request received for Title: '{title}', Artist: '{artist}', Language: '{language}'")
+    
+    should_cache = False
+    if language is None:
+        should_cache = True
+    elif language.lower() == 'en':
+        if "english" in title.lower() or "english" in artist.lower():
+            should_cache = True
+    
     cached = scraper.get_cached_data(title, artist, language)
     if cached:
+        logger.info("Returning cached lyrics via API.")
         return LyricsResponse(title=title, artist=artist, language=language or "original", lyrics=cached)
-    lyrics = scraper.get_lyrics(title, artist, language)
+    
+    lyrics = scraper.get_lyrics(title, artist, language, should_cache=should_cache)
     if lyrics != "Lyrics not found":
         if not scraper.is_lyrics_in_english(lyrics) and language is None and background_tasks:
+            logger.info("Lyrics not in English. Scheduling alternate language search.")
             background_tasks.add_task(scraper.search_fetch_and_cache_alternate, title, artist, language)
+        logger.info("Returning fetched lyrics via API.")
         return LyricsResponse(title=title, artist=artist, language=language or "original", lyrics=lyrics)
+    
+    logger.warning("Lyrics not found. Raising HTTP 404.")
     raise HTTPException(status_code=404, detail="Lyrics not found")
 
 if __name__ == "__main__":
+    logger.info("Starting Uvicorn server.")
     uvicorn.run(app, host="0.0.0.0", port=19999)
