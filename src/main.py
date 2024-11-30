@@ -246,11 +246,18 @@ class LyricLocate:
                 if "genius.com" in link:
                     link_match = re.search(r'(https?://genius\.com/[^\s&]+)', link)
                     if link_match:
-                        lyrics = self.scrape_lyrics(link_match.group())
-                        if lyrics:
-                            logger.info("Lyrics found via Google search on Genius.")
-                            return lyrics
-            logger.info("No lyrics found via Google search on Genius.")
+                        url = link_match.group()
+                        # Extract artist and title from the URL
+                        match = re.match(r'https?://genius\.com/(?P<extracted_artist>[^/]+)-(?P<extracted_title>[^/]+)-lyrics', url)
+                        if match:
+                            extracted_artist = match.group('extracted_artist').replace('-', ' ').title()
+                            extracted_title = match.group('extracted_title').replace('-', ' ').title()
+                            if self.is_match(extracted_artist, extracted_title, artist, title):
+                                lyrics = self.scrape_lyrics(url)
+                                if lyrics:
+                                    logger.info("Lyrics found via find_genius_url_using_google_if_no_genius_api matching verified.")
+                                    return lyrics
+            logger.info("No matching lyrics found via find_genius_url_using_google_if_no_genius_api.")
         except requests.RequestException as e:
             logger.error(f"Google search failed: {e}")
         return None
@@ -270,7 +277,6 @@ class LyricLocate:
         return None
 
     def scrape_google_lyrics(self, query: str, artist_verification: bool, artist: str = None) -> Optional[str]:
-        logger.info(f"Scraping Google lyrics with query: '{query}'")
         params = {**self.google_params, 'q': query}
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
@@ -286,7 +292,6 @@ class LyricLocate:
                     if not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
                         logger.info("Valid lyrics found in Google search results.")
                         return self.clean_lyrics_text(lyrics)
-            logger.info("No valid lyrics found in Google search results.")
         except requests.RequestException as e:
             logger.error(f"Google scrape failed: {e}")
         return None
