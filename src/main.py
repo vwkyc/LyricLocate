@@ -308,10 +308,16 @@ class LyricLocate:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
+            
             if artist_verification and artist:
-                if not any(name.lower() in soup.text.lower() for name in self.clean_artists(artist)):
+                extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_='rVusze')]
+                if not any(
+                    self.is_match(extracted_artist, "", artist, "") 
+                    for extracted_artist in extracted_artists
+                ):
                     logger.info("Artist verification failed in Google search results.")
                     return None
+            
             for div in soup.select('div.ujudUb, div.PZPZlf, div[data-lyricid]'):
                 lyrics = div.get_text(separator='\n').strip()
                 if len(lyrics.split('\n')) > 4:
