@@ -47,8 +47,8 @@ class LyricLocate:
     def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         return self.db.get_cached_data(title, artist, language)
 
-    def cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
-        self.db.cache(title, artist, lyrics, language)
+    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
+        self.db.save_to_cache(title, artist, lyrics, language)
 
     def is_lyrics_in_english(self, lyrics: str) -> bool:
         if not lyrics:
@@ -260,10 +260,10 @@ class LyricLocate:
 
         if lyrics and lyrics != "Lyrics not found":
             if should_cache:
-                self.cache(title, artist, lyrics, language)
+                self.save_to_cache(title, artist, lyrics, language)
                 logger.info("Lyrics retrieved and cached successfully.")
                 if language == 'original' and self.is_lyrics_in_english(lyrics):
-                    self.cache(title, artist, lyrics, 'en')
+                    self.save_to_cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")
             return lyrics
 
@@ -283,7 +283,7 @@ class LyricLocate:
             # Check if 'original' lyrics are in English
             if self.is_lyrics_in_english(original_lyrics):
                 # Cache the 'original' lyrics again under 'en'
-                self.cache(title, artist, original_lyrics, 'en')
+                self.save_to_cache(title, artist, original_lyrics, 'en')
                 logger.info("Background Task: Original lyrics are in English. Cached as 'en' as well.")
             else:
                 logger.info("Background Task: Original lyrics are not in English. No additional caching required.")
@@ -318,7 +318,7 @@ class LyricLocate:
         if lyrics and lyrics != "Lyrics not found":
             if self.is_lyrics_in_english(lyrics):
                 # Only cache if the lyrics are actually in English
-                self.cache(title, artist, lyrics, alternate)
+                self.save_to_cache(title, artist, lyrics, alternate)
                 logger.info("Background Task: English lyrics verified and cached successfully.")
             else:
                 logger.info("Background Task: Retrieved lyrics are not in English. Not caching.")

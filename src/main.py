@@ -112,15 +112,15 @@ def get_lyrics_endpoint(
                         content={"detail": "English lyrics not found"}
                     )
                 
-                lyric_locator.cache(title, artist, lyrics, sanitized_language)
+                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
                 
                 if background_tasks and not lyric_locator.get_cached_data(title, artist, 'original'):
                     background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
             else:
-                lyric_locator.cache(title, artist, lyrics, sanitized_language)
+                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
                 
                 if lyric_locator.is_lyrics_in_english(lyrics):
-                    lyric_locator.cache(title, artist, lyrics, 'en')
+                    lyric_locator.save_to_cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")
                 elif background_tasks and not lyric_locator.get_cached_data(title, artist, 'en'):
                     background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
