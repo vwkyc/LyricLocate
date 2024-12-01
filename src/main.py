@@ -488,11 +488,14 @@ class LyricLocate:
         alternate = 'en'
         logger.info(f"Fetching and caching alternate language lyrics: '{alternate}'")
         lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=True, should_cache=False)
-        if lyrics and ("english" in title.lower() or "english" in artist.lower()):
-            self.save_to_cache(title, artist, lyrics, alternate)
-            logger.info("Alternate language lyrics cached successfully.")
+        if lyrics:
+            if self.is_lyrics_in_english(lyrics):
+                self.save_to_cache(title, artist, lyrics, alternate)
+                logger.info("Alternate language lyrics cached successfully.")
+            else:
+                logger.info("Alternate language lyrics are not in English. Not caching.")
         else:
-            logger.info("Alternate language lyrics do not contain 'english' in title or artist. Not caching.")
+            logger.info("Alternate language lyrics not found. Not caching.")
 
 app = FastAPI()
 lyric_locator = LyricLocate()
