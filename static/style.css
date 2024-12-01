@@ -107,6 +107,23 @@ button:hover {
     display: none; /* Initially hidden */
 }
 
+#lyrics h3 {
+    margin: 0;
+    font-size: 1.2em;
+    color: #c1c1c1;
+}
+
+#lyrics h4 {
+    margin-top: 5px;
+    font-size: 1em;
+    color: #a1a1a1;
+}
+
+#lyrics pre {
+    font-size: 1.2em;
+    line-height: 1.5;
+}
+
 footer {
     background-color: #1c1c1c;
     color: #e0e0e0;
