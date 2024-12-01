@@ -3,10 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <title>LyricLocate Lyrics Finder</title>
+    <meta name="description" content="LyricLocate Lyrics Finder allows you to search and fetch song lyrics by title, artist, or Spotify URL.">
     <meta name="google-site-verification" content="jFGsPbWqvtSZ173BHYC40iYus6hyy15Iwk6V2U8gw9E" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <meta property="og:title" content="LyricLocate Lyrics Finder">
+    <meta property="og:description" content="Search and find song lyrics using title, artist, or Spotify URL.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://LyricLocate.kmst.me/">
+
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link rel="stylesheet" href="/static/style.css">
+    
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "LyricLocate Lyrics Finder",
+      "url": "https://LyricLocate.kmst.me/",
+      "description": "Search and find song lyrics by title, artist, or Spotify URL."
+    }
+    </script>
 </head>
 <body>
     <nav>
@@ -51,7 +68,7 @@
                 </div>
                 <button type="submit">Get Lyrics</button>
             </form>
-            <div id="lyrics"></div>
+            <div id="lyrics" aria-live="polite"></div>
         </section>
         <section class="container" id="api">
             <h2>API Usage</h2>
