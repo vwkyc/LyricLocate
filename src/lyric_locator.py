@@ -1,16 +1,13 @@
 import os
 import re
-import threading
 import hashlib
 import logging
 import requests
-import base64
-from urllib.parse import urlparse
 from difflib import SequenceMatcher
 from typing import Optional
 from bs4 import BeautifulSoup
-import unidecode
 from database import LyricsDatabase
+from spotify_handler import SpotifyHandler
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +22,7 @@ class LyricLocate:
         }
         self.google_params = {'hl': 'en'}
         self.db = LyricsDatabase()
-
-        self.spotify_client_id = os.getenv("SPOTIFY_CLIENT_ID")
-        self.spotify_client_secret = os.getenv("SPOTIFY_CLIENT_SECRET")
-        self.spotify_access_token = self._get_spotify_token() if self.spotify_client_id and self.spotify_client_secret else None
+        self.spotify_handler = SpotifyHandler()
 
     @staticmethod
     def get_cache_key(title: str, artist: str, language: str = None) -> str:
@@ -38,16 +32,26 @@ class LyricLocate:
         return hashlib.md5(key.encode()).hexdigest()
 
     @staticmethod
-    def clean_text(text: str) -> str:
-        return unidecode.unidecode(text).lower().strip() if text else text
-
-    @staticmethod
     def clean_title(title: str) -> str:
         return re.sub(r'\b(feat\.|ft\.)\s+\w+', '', title, flags=re.IGNORECASE).strip().lower() if title else title
 
     @staticmethod
     def clean_artists(artist: str) -> list:
         return [name.strip() for name in re.split(r'[;,]', artist)] if artist else []
+
+    def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+        return self.db.get_cached_data(title, artist, language)
+
+    def cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
+        self.db.cache(title, artist, lyrics, language)
+
+    def is_lyrics_in_english(self, lyrics: str) -> bool:
+        if not lyrics:
+            return False
+        num_ascii = sum(1 for c in lyrics if ord(c) < 128)
+        is_english = (num_ascii / len(lyrics)) > 0.9
+        logger.info(f"Lyrics are {'mostly' if is_english else 'not'} in English.")
+        return is_english
 
     def is_match(self, extracted_artist: str, extracted_title: str, expected_artist: str, expected_title: str) -> bool:
         try:
@@ -114,12 +118,10 @@ class LyricLocate:
         ]
         for pattern, repl in patterns:
             lyrics = re.sub(pattern, repl, lyrics)
-        
         for phrase in unwanted_phrases:
             if phrase in lyrics:
                 lyrics = lyrics.split(phrase)[0].strip()
                 break
-        
         return lyrics
 
     def scrape_lyrics(self, url: str) -> Optional[str]:
@@ -248,115 +250,6 @@ class LyricLocate:
             logger.error(f"Google scrape failed: {e}")
         return None
 
-    def is_lyrics_in_english(self, lyrics: str) -> bool:
-        if not lyrics:
-            return False
-        num_ascii = sum(1 for c in lyrics if ord(c) < 128)
-        is_english = (num_ascii / len(lyrics)) > 0.9
-        logger.info(f"Lyrics are {'mostly' if is_english else 'not'} in English.")
-        return is_english
-
-    def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
-        return self.db.get_cached_data(title, artist, language)
-
-    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
-        self.db.save_to_cache(title, artist, lyrics, language)
-
-    def get_cached_spotify_track(self, spotify_url: str) -> Optional[tuple[str, str]]:
-        return self.db.get_cached_spotify_track(spotify_url)
-
-    def cache_spotify_track(self, spotify_url: str, title: str, artist: str):
-        self.db.cache_spotify_track(spotify_url, title, artist)
-
-    def _get_spotify_token(self) -> Optional[str]:
-        """Get Spotify access token using client credentials"""
-        try:
-            auth = base64.b64encode(f"{self.spotify_client_id}:{self.spotify_client_secret}".encode()).decode()
-            response = requests.post(
-                "https://accounts.spotify.com/api/token",
-                headers={"Authorization": f"Basic {auth}"},
-                data={"grant_type": "client_credentials"}
-            )
-            response.raise_for_status()
-            return response.json()["access_token"]
-        except Exception as e:
-            logger.error(f"Failed to get Spotify token: {e}")
-            return None
-
-    def extract_track_id(self, spotify_url: str) -> Optional[str]:
-        try:
-            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
-            
-            parsed = urlparse(base_url)
-            if parsed.netloc not in ['open.spotify.com', 'spotify.com']:
-                logger.warning(f"Not a valid Spotify URL: {spotify_url}")
-                return None
-
-            path_parts = parsed.path.split('/')
-            if len(path_parts) < 3 or path_parts[1] != 'track':
-                logger.warning(f"Not a valid Spotify track URL: {spotify_url}")
-                return None
-
-            track_id = path_parts[2]
-            logger.info(f"Extracted Spotify track ID: {track_id}")
-            return track_id
-
-        except Exception as e:
-            logger.error(f"Failed to extract track ID from URL {spotify_url}: {e}")
-            return None
-
-    def get_track_info(self, spotify_url: str) -> Optional[tuple[str, str]]:
-        """Get track info from Spotify API or web scraping"""
-        cached = self.get_cached_spotify_track(spotify_url)
-        if cached:
-            return cached
-
-        track_id = self.extract_track_id(spotify_url)
-        if not track_id:
-            return None
-
-        if self.spotify_access_token:
-            try:
-                response = requests.get(
-                    f"https://api.spotify.com/v1/tracks/{track_id}",
-                    headers={"Authorization": f"Bearer {self.spotify_access_token}"}
-                )
-                response.raise_for_status()
-                track = response.json()
-                title = track["name"]
-                artist = ", ".join(artist["name"] for artist in track["artists"])
-                
-                # Cache the result
-                self.cache_spotify_track(spotify_url, title, artist)
-                return title, artist
-                
-            except Exception as e:
-                logger.error(f"Failed to get track info from Spotify API: {e}")
-        
-        # If we get here, either API failed or we don't have credentials
-        logger.warning("Falling back to web scraping for Spotify track info")
-        try:
-            response = requests.get(spotify_url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Try to extract from meta tags
-            title_tag = soup.find('meta', property='og:title')
-            artist_tag = soup.find('meta', property='og:description')
-            
-            if title_tag and artist_tag:
-                title = title_tag.get('content', '').split(' - ')[0].strip()
-                artist = artist_tag.get('content', '').split(' · ')[0].strip()
-                if title and artist:
-                    # Cache the scraped result
-                    self.cache_spotify_track(spotify_url, title, artist)
-                    return title, artist
-                    
-        except Exception as e:
-            logger.error(f"Failed to scrape track info from Spotify page: {e}")
-        
-        return None
-
     def get_lyrics(self, title: str, artist: str, language: str = "original", skip_google_search: bool = False, should_cache: bool = False) -> str:
         logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
         cached = self.get_cached_data(title, artist, language)
@@ -371,20 +264,17 @@ class LyricLocate:
             google_genius_result = self.find_genius_url_using_google_if_no_genius_api(title, artist, language, initial_genius_url=genius_url)
             if google_genius_result:
                 lyrics = google_genius_result
-
         if not lyrics and not skip_google_search:
             lyrics = self.google_search(title, artist, language)
 
         if lyrics and lyrics != "Lyrics not found":
             if should_cache:
-                self.save_to_cache(title, artist, lyrics, language)
+                self.cache(title, artist, lyrics, language)
                 logger.info("Lyrics retrieved and cached successfully.")
-                
                 # Check if 'original' lyrics are in English and cache as 'en'
                 if language == 'original' and self.is_lyrics_in_english(lyrics):
-                    self.save_to_cache(title, artist, lyrics, 'en')
+                    self.cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")
-            
             return lyrics
 
         return "Lyrics not found"
@@ -398,14 +288,12 @@ class LyricLocate:
             skip_google_search=False, 
             should_cache=True
         )
-        
         if original_lyrics and original_lyrics != "Lyrics not found":
             logger.info("Background Task: Original lyrics fetched and cached successfully.")
-            
             # Check if 'original' lyrics are in English
             if self.is_lyrics_in_english(original_lyrics):
                 # Cache the 'original' lyrics again under 'en'
-                self.save_to_cache(title, artist, original_lyrics, 'en')
+                self.cache(title, artist, original_lyrics, 'en')
                 logger.info("Background Task: Original lyrics are in English. Cached as 'en' as well.")
             else:
                 logger.info("Background Task: Original lyrics are not in English. No additional caching required.")
@@ -421,7 +309,6 @@ class LyricLocate:
             skip_google_search=False,
             should_cache=True
         )
-        
         if en_lyrics and en_lyrics != "Lyrics not found":
             logger.info("Background Task: English lyrics fetched and cached successfully.")
         else:
@@ -441,7 +328,7 @@ class LyricLocate:
         if lyrics and lyrics != "Lyrics not found":
             if self.is_lyrics_in_english(lyrics):
                 # Only cache if the lyrics are actually in English
-                self.save_to_cache(title, artist, lyrics, alternate)
+                self.cache(title, artist, lyrics, alternate)
                 logger.info("Background Task: English lyrics verified and cached successfully.")
             else:
                 logger.info("Background Task: Retrieved lyrics are not in English. Not caching.")

@@ -4,27 +4,12 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from pathlib import Path
 import uvicorn
 from typing import Optional
 from lyric_locator import LyricLocate
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-app = FastAPI()
-lyric_locator = LyricLocate()
-
-# Define the static files directory
-STATIC_DIR = Path(__file__).parent.parent / "static"
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-class LyricsResponse(BaseModel):
-    title: str
-    artist: str
-    language: Optional[str]
-    lyrics: str
 
 def validate_language(language: Optional[str]) -> Optional[str]:
     if language:
@@ -37,9 +22,21 @@ def validate_language(language: Optional[str]) -> Optional[str]:
             raise HTTPException(status_code=400, detail="Invalid language parameter. Only 'en' and 'original' are accepted.")
     return "original"
 
+app = FastAPI()
+lyric_locator = LyricLocate()
+
+class LyricsResponse(BaseModel):
+    title: str
+    artist: str
+    language: Optional[str]
+    lyrics: str
+
+STATIC_DIR = "../static"
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
-    return FileResponse(STATIC_DIR / "index.html")
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
 @app.get("/api/get_lyrics_from_spotify", response_model=LyricsResponse)
 def get_lyrics_from_spotify_endpoint(
@@ -51,7 +48,7 @@ def get_lyrics_from_spotify_endpoint(
     
     sanitized_language = validate_language(language)
     
-    track_info = lyric_locator.get_track_info(spotify_url)
+    track_info = lyric_locator.spotify_handler.get_track_info(spotify_url)
     if not track_info:
         raise HTTPException(status_code=400, detail="Could not extract track information from Spotify URL")
     
@@ -115,15 +112,15 @@ def get_lyrics_endpoint(
                         content={"detail": "English lyrics not found"}
                     )
                 
-                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
+                lyric_locator.cache(title, artist, lyrics, sanitized_language)
                 
                 if background_tasks and not lyric_locator.get_cached_data(title, artist, 'original'):
                     background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
             else:
-                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
+                lyric_locator.cache(title, artist, lyrics, sanitized_language)
                 
                 if lyric_locator.is_lyrics_in_english(lyrics):
-                    lyric_locator.save_to_cache(title, artist, lyrics, 'en')
+                    lyric_locator.cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")
                 elif background_tasks and not lyric_locator.get_cached_data(title, artist, 'en'):
                     background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)

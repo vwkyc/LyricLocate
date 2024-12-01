@@ -76,7 +76,7 @@ class LyricsDatabase:
             return result[0]
         return None
 
-    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
+    def cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
         storage_language = language
         cache_key = self.get_cache_key(title, artist, storage_language)
         
