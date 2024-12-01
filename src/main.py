@@ -15,13 +15,14 @@ import sqlite3
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv, find_dotenv
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uvicorn
 from difflib import SequenceMatcher
 import unidecode
 
+# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,30 @@ if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
     logger.warning("SPOTIFY_CLIENT_ID and/or SPOTIFY_CLIENT_SECRET not set. Will fallback to web scraping for Spotify links.")
 
 class LyricsDatabase:
+    EXPIRY_DAYS = 24  # Define the expiry duration for cached lyrics
+
     def __init__(self, db_path="../cache/lyrics.db"):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.lock = threading.Lock()
+        self.db_path = db_path
+        self.local = threading.local()
         self.init_db()
 
+    @staticmethod
+    def get_cache_key(title: str, artist: str, language: str = None) -> str:
+        key = f"{title.lower()}_{artist.lower()}"
+        if language:
+            key += f"_{language.lower()}"
+        return hashlib.md5(key.encode()).hexdigest()
+
+    def _get_connection(self):
+        if not hasattr(self.local, 'conn'):
+            self.local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        return self.local.conn
+
     def init_db(self):
-        with self.conn:
-            self.conn.execute("""CREATE TABLE IF NOT EXISTS lyrics (
+        conn = self._get_connection()
+        with conn:
+            conn.execute("""CREATE TABLE IF NOT EXISTS lyrics (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 cache_key TEXT UNIQUE,
                 title TEXT,
@@ -59,7 +75,7 @@ class LyricsDatabase:
                 UNIQUE(title, artist, language)
             )""")
             
-            self.conn.execute("""CREATE TABLE IF NOT EXISTS spotify_cache (
+            conn.execute("""CREATE TABLE IF NOT EXISTS spotify_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 spotify_url TEXT UNIQUE,
                 title TEXT,
@@ -67,12 +83,87 @@ class LyricsDatabase:
                 timestamp DATETIME
             )""")
             
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_key ON lyrics(cache_key)")
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON lyrics(timestamp)")
-            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_spotify_url ON spotify_cache(spotify_url)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_key ON lyrics(cache_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON lyrics(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_spotify_url ON spotify_cache(spotify_url)")
+
+    def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+        cache_key = self.get_cache_key(title, artist, language)
+        query_languages = [language]
+        
+        placeholders = ','.join(['?'] * len(query_languages))
+        query = f"""
+            SELECT lyrics FROM lyrics 
+            WHERE cache_key = ? AND 
+                language IN ({placeholders}) AND
+                datetime(timestamp) > datetime('now', '-{self.EXPIRY_DAYS} days')
+        """
+        params = [cache_key] + query_languages
+        
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        if result:
+            logger.info(f"Cache hit for '{title}' by '{artist}' with language '{language}'")
+            return result[0]
+        return None
+
+    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
+        storage_language = language
+        cache_key = self.get_cache_key(title, artist, storage_language)
+        
+        conn = self._get_connection()
+        with conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO lyrics (cache_key, title, artist, language, lyrics, timestamp)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
+            """, (cache_key, title, artist, storage_language, lyrics))
+
+    def delete_cached_lyrics(self, title: str, artist: str, language: str):
+        cache_key = self.get_cache_key(title, artist, language)
+        conn = self._get_connection()
+        with conn:
+            conn.execute("""
+                DELETE FROM lyrics 
+                WHERE cache_key = ? AND language = ?
+            """, (cache_key, language))
+            logger.info(f"Deleted cached lyrics for '{title}' by '{artist}' with language '{language}'")
+
+    def get_cached_spotify_track(self, spotify_url: str) -> Optional[tuple[str, str]]:
+        try:
+            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT title, artist FROM spotify_cache 
+                WHERE spotify_url = ? AND
+                datetime(timestamp) > datetime('now', '-24 hours')
+            """, (base_url,))
+            result = cursor.fetchone()
+            if result:
+                logger.info(f"Spotify cache hit for URL: {base_url}")
+                return result[0], result[1]
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving from Spotify cache: {e}")
+            return None
+
+    def cache_spotify_track(self, spotify_url: str, title: str, artist: str):
+        try:
+            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
+            conn = self._get_connection()
+            with conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO spotify_cache 
+                    (spotify_url, title, artist, timestamp)
+                    VALUES (?, ?, ?, datetime('now'))
+                """, (base_url, title, artist))
+                logger.info(f"Cached Spotify track info for URL: {base_url}")
+        except Exception as e:
+            logger.error(f"Error caching Spotify track info: {e}")
 
 class LyricLocate:
-    EXPIRY_DAYS = 24
     def __init__(self):
         self.api_key = os.getenv("GENIUS_CLIENT_ACCESS_TOKEN")
         self.genius_headers = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
@@ -94,39 +185,6 @@ class LyricLocate:
         if language:
             key += f"_{language.lower()}"
         return hashlib.md5(key.encode()).hexdigest()
-
-    def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
-        cache_key = self.get_cache_key(title, artist, language)
-        query_languages = [language]
-        
-        placeholders = ','.join(['?'] * len(query_languages))
-        query = f"""
-            SELECT lyrics FROM lyrics 
-            WHERE cache_key = ? AND 
-                language IN ({placeholders}) AND
-                datetime(timestamp) > datetime('now', '-{self.EXPIRY_DAYS} days')
-        """
-        params = [cache_key] + query_languages
-        
-        with self.db.lock:
-            cursor = self.db.conn.cursor()
-            cursor.execute(query, params)
-            result = cursor.fetchone()
-            if result:
-                logger.info(f"Cache hit for '{title}' by '{artist}' with language '{language}'")
-                return result[0]
-        return None
-
-    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
-        storage_language = language
-        
-        cache_key = self.get_cache_key(title, artist, storage_language)
-        with self.db.lock:
-            self.db.conn.execute("""
-                INSERT OR REPLACE INTO lyrics (cache_key, title, artist, language, lyrics, timestamp)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
-            """, (cache_key, title, artist, storage_language, lyrics))
-            self.db.conn.commit()
 
     @staticmethod
     def clean_text(text: str) -> str:
@@ -335,39 +393,18 @@ class LyricLocate:
         is_english = (num_ascii / len(lyrics)) > 0.9
         logger.info(f"Lyrics are {'mostly' if is_english else 'not'} in English.")
         return is_english
-    
+
+    def get_cached_data(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+        return self.db.get_cached_data(title, artist, language)
+
+    def save_to_cache(self, title: str, artist: str, lyrics: str, language: str = "original"):
+        self.db.save_to_cache(title, artist, lyrics, language)
+
     def get_cached_spotify_track(self, spotify_url: str) -> Optional[tuple[str, str]]:
-        try:
-            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
-            with self.db.lock:
-                cursor = self.db.conn.cursor()
-                cursor.execute("""
-                    SELECT title, artist FROM spotify_cache 
-                    WHERE spotify_url = ? AND
-                    datetime(timestamp) > datetime('now', '-24 hours')
-                """, (base_url,))
-                result = cursor.fetchone()
-                if result:
-                    logger.info(f"Spotify cache hit for URL: {base_url}")
-                    return result[0], result[1]
-            return None
-        except Exception as e:
-            logger.error(f"Error retrieving from Spotify cache: {e}")
-            return None
+        return self.db.get_cached_spotify_track(spotify_url)
 
     def cache_spotify_track(self, spotify_url: str, title: str, artist: str):
-        try:
-            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
-            with self.db.lock:
-                self.db.conn.execute("""
-                    INSERT OR REPLACE INTO spotify_cache 
-                    (spotify_url, title, artist, timestamp)
-                    VALUES (?, ?, ?, datetime('now'))
-                """, (base_url, title, artist))
-                self.db.conn.commit()
-                logger.info(f"Cached Spotify track info for URL: {base_url}")
-        except Exception as e:
-            logger.error(f"Error caching Spotify track info: {e}")
+        self.db.cache_spotify_track(spotify_url, title, artist)
 
     def _get_spotify_token(self) -> Optional[str]:
         """Get Spotify access token using client credentials"""
@@ -492,7 +529,13 @@ class LyricLocate:
 
     def fetch_original_lyrics(self, title: str, artist: str) -> None:
         logger.info(f"Background Task: Fetching original lyrics for Title: '{title}', Artist: '{artist}'")
-        original_lyrics = self.get_lyrics(title, artist, language='original', skip_google_search=False, should_cache=True)
+        original_lyrics = self.get_lyrics(
+            title, 
+            artist, 
+            language='original', 
+            skip_google_search=False, 
+            should_cache=True
+        )
         
         if original_lyrics and original_lyrics != "Lyrics not found":
             logger.info("Background Task: Original lyrics fetched and cached successfully.")
@@ -507,15 +550,20 @@ class LyricLocate:
         else:
             logger.warning("Background Task: Original lyrics could not be fetched.")
 
-    def search_song(self, title: str, artist: str, language: str = "original") -> Optional[str]:
-        logger.info("Initiating search using Genius API.")
-        url = self.find_url_on_genius(title, artist, language)
-        if url:
-            logger.info("Genius API search successful.")
-            return self.scrape_lyrics(url)
+    def fetch_english_lyrics(self, title: str, artist: str) -> None:
+        logger.info(f"Background Task: Fetching English lyrics for Title: '{title}', Artist: '{artist}'")
+        en_lyrics = self.get_lyrics(
+            title,
+            artist,
+            language='en',
+            skip_google_search=False,
+            should_cache=True
+        )
+        
+        if en_lyrics and en_lyrics != "Lyrics not found":
+            logger.info("Background Task: English lyrics fetched and cached successfully.")
         else:
-            logger.info("Genius API search did not find any results.")
-            return None
+            logger.warning("Background Task: English lyrics could not be fetched.")
 
     def search_fetch_and_cache_alternate(self, title: str, artist: str, language: str):
         alternate = 'en'
@@ -527,19 +575,21 @@ class LyricLocate:
             logger.info("Background Task: 'en' lyrics are already cached. No need to fetch again.")
             return
         
-        # Fetch 'en' lyrics and cache them
-        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=False, should_cache=True)
+        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=False, should_cache=False)
         if lyrics and lyrics != "Lyrics not found":
             if self.is_lyrics_in_english(lyrics):
-                logger.info("Background Task: Alternate language lyrics fetched and cached successfully.")
+                # Only cache if the lyrics are actually in English
+                self.save_to_cache(title, artist, lyrics, alternate)
+                logger.info("Background Task: English lyrics verified and cached successfully.")
             else:
-                logger.info("Background Task: Alternate language lyrics are not in English. Not caching.")
+                logger.info("Background Task: Retrieved lyrics are not in English. Not caching.")
         else:
             logger.info("Background Task: Alternate language lyrics not found. Not caching.")
 
 app = FastAPI()
 lyric_locator = LyricLocate()
 
+# Define the static files directory
 STATIC_DIR = Path(__file__).parent.parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -585,39 +635,94 @@ def get_lyrics_from_spotify_endpoint(
 def get_lyrics_endpoint(
     title: str, 
     artist: str, 
-    language: Optional[str] = Query(None, regex="^(en|original)$", description="Language code, 'en' or 'original' are accepted."),
+    language: Optional[str] = Query(
+        None, 
+        regex="^(en|original)$", 
+        description="Language code, 'en' or 'original' are accepted."
+    ),
     background_tasks: BackgroundTasks = None
 ):
     logger.info(f"API request received for Title: '{title}', Artist: '{artist}', Language: '{language}'")
     
     sanitized_language = validate_language(language)
     
-    should_cache = False
-    if sanitized_language in ['original', 'en']:
-        should_cache = True  # Always cache when language is 'original' or 'en'
-    
-    cached = lyric_locator.get_cached_data(title, artist, sanitized_language)
-    if cached:
-        response_language = sanitized_language
-        logger.info("Returning cached lyrics via API.")
-        return LyricsResponse(title=title, artist=artist, language=response_language, lyrics=cached)
-    
-    lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=should_cache)
-    if lyrics != "Lyrics not found":
-        if sanitized_language == 'original' and not lyric_locator.is_lyrics_in_english(lyrics) and background_tasks:
-            logger.info("Lyrics not in English. Scheduling alternate language search.")
-            background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
+    try:
+        # Check cache first
+        cached = lyric_locator.get_cached_data(title, artist, sanitized_language)
+        if cached:
+            if sanitized_language == 'en' and not lyric_locator.is_lyrics_in_english(cached):
+                # Delete invalid English lyrics from cache
+                lyric_locator.db.delete_cached_lyrics(title, artist, 'en')
+                
+                # Try to fetch new lyrics immediately
+                lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=True)
+                if lyrics != "Lyrics not found" and lyric_locator.is_lyrics_in_english(lyrics):
+                    return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
+                
+                if background_tasks:
+                    background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
+                    background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "English lyrics not found"}
+                )
+            
+            if background_tasks:
+                if sanitized_language == 'original' and not lyric_locator.get_cached_data(title, artist, 'en'):
+                    background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
+                elif sanitized_language == 'en' and not lyric_locator.get_cached_data(title, artist, 'original'):
+                    background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+                    
+            return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=cached)
         
-        if sanitized_language == 'en' and background_tasks:
-            logger.info("Scheduling background task to fetch and cache 'original' lyrics.")
-            background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+        # If not in cache, fetch new lyrics
+        lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=False)
+        if lyrics != "Lyrics not found":
+            if sanitized_language == 'en':
+                if not lyric_locator.is_lyrics_in_english(lyrics):
+                    if background_tasks:
+                        background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
+                        background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+                    return JSONResponse(
+                        status_code=404,
+                        content={"detail": "English lyrics not found"}
+                    )
+                
+                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
+                
+                if background_tasks and not lyric_locator.get_cached_data(title, artist, 'original'):
+                    background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+            else:
+                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
+                
+                if lyric_locator.is_lyrics_in_english(lyrics):
+                    lyric_locator.save_to_cache(title, artist, lyrics, 'en')
+                    logger.info("Original lyrics are in English. Cached as 'en' as well.")
+                elif background_tasks and not lyric_locator.get_cached_data(title, artist, 'en'):
+                    background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
+            
+            return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
         
-        response_language = sanitized_language
-        logger.info("Returning fetched lyrics via API.")
-        return LyricsResponse(title=title, artist=artist, language=response_language, lyrics=lyrics)
-    
-    logger.warning("Lyrics not found. Raising HTTP 404.")
-    raise HTTPException(status_code=404, detail="Lyrics not found")
+        # Schedule background tasks and return 404
+        if background_tasks:
+            if sanitized_language == 'en':
+                background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
+                background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+            else:
+                background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
+                background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
+        
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Lyrics not found"}
+        )
+        
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"}
+        )
 
 if __name__ == "__main__":
     logger.info("Starting Uvicorn server.")
