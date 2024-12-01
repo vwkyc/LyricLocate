@@ -56,7 +56,10 @@ document.addEventListener('DOMContentLoaded', function() {
                   throw new Error('Please enter a valid Spotify track URL');
               }
 
-              url = `/api/get_lyrics_from_spotify?spotify_url=${encodeURIComponent(spotifyUrl)}&language=${encodeURIComponent(language)}`;
+              url = `/api/get_lyrics_from_spotify?spotify_url=${encodeURIComponent(spotifyUrl)}`;
+              if (language) {
+                  url += `&language=${encodeURIComponent(language)}`;
+              }
           } else {
               const title = document.getElementById('title').value.trim();
               const artist = document.getElementById('artist').value.trim();
@@ -65,7 +68,10 @@ document.addEventListener('DOMContentLoaded', function() {
                   throw new Error('Please enter both song title and artist');
               }
 
-              url = `/api/get_lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&language=${encodeURIComponent(language)}`;
+              url = `/api/get_lyrics?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`;
+              if (language) {
+                  url += `&language=${encodeURIComponent(language)}`;
+              }
           }
 
           console.log('Fetching URL:', url); // Debug log
