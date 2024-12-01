@@ -14,7 +14,7 @@ import requests
 import sqlite3
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv, find_dotenv
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -39,116 +39,7 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
     logger.warning("SPOTIFY_CLIENT_ID and/or SPOTIFY_CLIENT_SECRET not set. Will fallback to web scraping for Spotify links.")
 
-class SpotifyTrackFetcher:
-    def __init__(self):
-        self.client_id = SPOTIFY_CLIENT_ID
-        self.client_secret = SPOTIFY_CLIENT_SECRET
-        self.access_token = self._get_token() if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET else None
-
-    def extract_track_id(self, spotify_url: str) -> Optional[str]:
-        """Extract track ID from Spotify URL"""
-        try:
-            parsed = urlparse(spotify_url)
-            if 'open.spotify.com' not in parsed.netloc:
-                logger.error("Not a valid Spotify URL")
-                return None
-            
-            path_parts = parsed.path.split('/')
-            if 'track' in path_parts:
-                track_idx = path_parts.index('track')
-                if len(path_parts) > track_idx + 1:
-                    return path_parts[track_idx + 1]
-            logger.error("Could not extract track ID from URL")
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing Spotify URL: {e}")
-            return None
-
-    def _get_token(self) -> Optional[str]:
-        """Get Spotify access token using client credentials"""
-        try:
-            auth = base64.b64encode(f"{self.client_id}:{self.client_secret}".encode()).decode()
-            response = requests.post(
-                "https://accounts.spotify.com/api/token",
-                headers={"Authorization": f"Basic {auth}"},
-                data={"grant_type": "client_credentials"}
-            )
-            response.raise_for_status()
-            return response.json()["access_token"]
-        except Exception as e:
-            logger.error(f"Failed to get Spotify token: {e}")
-            return None
-
-    def _scrape_track_info(self, spotify_url: str) -> Optional[tuple[str, str]]:
-        """Fallback method to scrape track info from webpage"""
-        try:
-            response = requests.get(spotify_url)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Attempt to extract from meta tags
-            og_title = soup.find('meta', property='og:title')
-            if og_title and og_title.get('content'):
-                full_title = og_title['content']
-                parts = full_title.split(' - ', 1)
-                if len(parts) == 2:
-                    title, artist = parts
-                    logger.info(f"Extracted via og:title: Title='{title.strip()}', Artist='{artist.strip()}'")
-                    return title.strip(), artist.strip()
-            
-            # Alternative extraction: Look for JSON data embedded in the page
-            scripts = soup.find_all('script')
-            for script in scripts:
-                if script.string and 'window.__INITIAL_STATE__' in script.string:
-                    json_text = script.string.partition('=')[-1].strip(' ;')
-                    data = json.loads(json_text)
-                    
-                    # Navigate the JSON structure to find track info
-                    try:
-                        track = data['entities']['tracks'][next(iter(data['entities']['tracks']))]
-                        title = track.get('name')
-                        artists = [artist['name'] for artist in track.get('artists', [])]
-                        if title and artists:
-                            logger.info(f"Extracted via JSON: Title='{title}', Artist='{', '.join(artists)}'")
-                            return title, ", ".join(artists)
-                    except (KeyError, StopIteration) as e:
-                        logger.error(f"Error extracting from JSON: {e}")
-            
-            # If all methods fail
-            logger.error("Could not extract track info from webpage using all methods.")
-            return None
-        except Exception as e:
-            logger.error(f"Error scraping Spotify webpage: {e}")
-            return None
-
-    def get_track_info(self, spotify_url: str) -> Optional[tuple[str, str]]:
-        """Get track title and artist from Spotify URL"""
-        track_id = self.extract_track_id(spotify_url)
-        if not track_id:
-            return None
-
-        # Try API first
-        if self.access_token:
-            try:
-                response = requests.get(
-                    f"https://api.spotify.com/v1/tracks/{track_id}",
-                    headers={"Authorization": f"Bearer {self.access_token}"}
-                )
-                if response.status_code == 200:
-                    track = response.json()
-                    return (
-                        track["name"],
-                        ", ".join(artist["name"] for artist in track["artists"])
-                    )
-            except Exception as e:
-                logger.error(f"Spotify API error: {e}")
-
-        # Fallback to scraping
-        return self._scrape_track_info(spotify_url)
-
 class LyricsDatabase:
-    """Handles all database operations for lyrics caching"""
-
     def __init__(self, db_path="../cache/lyrics.db"):
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -157,30 +48,33 @@ class LyricsDatabase:
 
     def init_db(self):
         with self.conn:
-            self.conn.execute("""
-                CREATE TABLE IF NOT EXISTS lyrics (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    cache_key TEXT UNIQUE,
-                    title TEXT,
-                    artist TEXT,
-                    language TEXT,
-                    lyrics TEXT,
-                    timestamp DATETIME,
-                    UNIQUE(title, artist, language)
-                )
-            """)
+            self.conn.execute("""CREATE TABLE IF NOT EXISTS lyrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cache_key TEXT UNIQUE,
+                title TEXT,
+                artist TEXT,
+                language TEXT,
+                lyrics TEXT,
+                timestamp DATETIME,
+                UNIQUE(title, artist, language)
+            )""")
+            
+            self.conn.execute("""CREATE TABLE IF NOT EXISTS spotify_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spotify_url TEXT UNIQUE,
+                title TEXT,
+                artist TEXT,
+                timestamp DATETIME
+            )""")
+            
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_key ON lyrics(cache_key)")
             self.conn.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON lyrics(timestamp)")
+            self.conn.execute("CREATE INDEX IF NOT EXISTS idx_spotify_url ON spotify_cache(spotify_url)")
 
 class LyricLocate:
-    """Main class for scraping and managing lyrics"""
-
     EXPIRY_DAYS = 24
-
     def __init__(self):
         self.api_key = os.getenv("GENIUS_CLIENT_ACCESS_TOKEN")
-        if not self.api_key:
-            logger.warning("GENIUS_CLIENT_ACCESS_TOKEN not set. Genius API will not work.")
         self.genius_headers = {'Authorization': f'Bearer {self.api_key}'} if self.api_key else {}
         self.google_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.5845.140 Safari/537.36',
@@ -189,6 +83,10 @@ class LyricLocate:
         }
         self.google_params = {'hl': 'en'}
         self.db = LyricsDatabase()
+
+        self.spotify_client_id = SPOTIFY_CLIENT_ID
+        self.spotify_client_secret = SPOTIFY_CLIENT_SECRET
+        self.spotify_access_token = self._get_spotify_token() if SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET else None
 
     @staticmethod
     def get_cache_key(title: str, artist: str, language: str = None) -> str:
@@ -424,6 +322,128 @@ class LyricLocate:
         is_english = (num_ascii / len(lyrics)) > 0.9
         logger.info(f"Lyrics are {'mostly' if is_english else 'not'} in English.")
         return is_english
+    
+    def get_cached_spotify_track(self, spotify_url: str) -> Optional[tuple[str, str]]:
+        try:
+            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
+            with self.db.lock:
+                cursor = self.db.conn.cursor()
+                cursor.execute("""
+                    SELECT title, artist FROM spotify_cache 
+                    WHERE spotify_url = ? AND
+                    datetime(timestamp) > datetime('now', '-24 hours')
+                """, (base_url,))
+                result = cursor.fetchone()
+                if result:
+                    logger.info(f"Spotify cache hit for URL: {base_url}")
+                    return result[0], result[1]
+            return None
+        except Exception as e:
+            logger.error(f"Error retrieving from Spotify cache: {e}")
+            return None
+
+    def cache_spotify_track(self, spotify_url: str, title: str, artist: str):
+        try:
+            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
+            with self.db.lock:
+                self.db.conn.execute("""
+                    INSERT OR REPLACE INTO spotify_cache 
+                    (spotify_url, title, artist, timestamp)
+                    VALUES (?, ?, ?, datetime('now'))
+                """, (base_url, title, artist))
+                self.db.conn.commit()
+                logger.info(f"Cached Spotify track info for URL: {base_url}")
+        except Exception as e:
+            logger.error(f"Error caching Spotify track info: {e}")
+
+    def _get_spotify_token(self) -> Optional[str]:
+        """Get Spotify access token using client credentials"""
+        try:
+            auth = base64.b64encode(f"{self.spotify_client_id}:{self.spotify_client_secret}".encode()).decode()
+            response = requests.post(
+                "https://accounts.spotify.com/api/token",
+                headers={"Authorization": f"Basic {auth}"},
+                data={"grant_type": "client_credentials"}
+            )
+            response.raise_for_status()
+            return response.json()["access_token"]
+        except Exception as e:
+            logger.error(f"Failed to get Spotify token: {e}")
+            return None
+
+    def extract_track_id(self, spotify_url: str) -> Optional[str]:
+        try:
+            base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
+            
+            parsed = urlparse(base_url)
+            if parsed.netloc not in ['open.spotify.com', 'spotify.com']:
+                logger.warning(f"Not a valid Spotify URL: {spotify_url}")
+                return None
+
+            path_parts = parsed.path.split('/')
+            if len(path_parts) < 3 or path_parts[1] != 'track':
+                logger.warning(f"Not a valid Spotify track URL: {spotify_url}")
+                return None
+
+            track_id = path_parts[2]
+            logger.info(f"Extracted Spotify track ID: {track_id}")
+            return track_id
+
+        except Exception as e:
+            logger.error(f"Failed to extract track ID from URL {spotify_url}: {e}")
+            return None
+
+    def get_track_info(self, spotify_url: str) -> Optional[tuple[str, str]]:
+        """Get track info from Spotify API or web scraping"""
+        cached = self.get_cached_spotify_track(spotify_url)
+        if cached:
+            return cached
+
+        track_id = self.extract_track_id(spotify_url)
+        if not track_id:
+            return None
+
+        if self.spotify_access_token:
+            try:
+                response = requests.get(
+                    f"https://api.spotify.com/v1/tracks/{track_id}",
+                    headers={"Authorization": f"Bearer {self.spotify_access_token}"}
+                )
+                response.raise_for_status()
+                track = response.json()
+                title = track["name"]
+                artist = ", ".join(artist["name"] for artist in track["artists"])
+                
+                # Cache the result
+                self.cache_spotify_track(spotify_url, title, artist)
+                return title, artist
+                
+            except Exception as e:
+                logger.error(f"Failed to get track info from Spotify API: {e}")
+        
+        # If we get here, either API failed or we don't have credentials
+        logger.warning("Falling back to web scraping for Spotify track info")
+        try:
+            response = requests.get(spotify_url)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try to extract from meta tags
+            title_tag = soup.find('meta', property='og:title')
+            artist_tag = soup.find('meta', property='og:description')
+            
+            if title_tag and artist_tag:
+                title = title_tag.get('content', '').split(' - ')[0].strip()
+                artist = artist_tag.get('content', '').split(' · ')[0].strip()
+                if title and artist:
+                    # Cache the scraped result
+                    self.cache_spotify_track(spotify_url, title, artist)
+                    return title, artist
+                    
+        except Exception as e:
+            logger.error(f"Failed to scrape track info from Spotify page: {e}")
+        
+        return None
 
     def get_lyrics(self, title: str, artist: str, language: str = None, skip_google_search: bool = False, should_cache: bool = False) -> str:
         logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
@@ -443,9 +463,12 @@ class LyricLocate:
         if not lyrics and not skip_google_search:
             lyrics = self.google_search(title, artist, language)
 
-        if lyrics:
+        if lyrics and lyrics != "Lyrics not found":
             if should_cache:
                 self.save_to_cache(title, artist, lyrics, language)
+                if language != 'en' and self.is_lyrics_in_english(lyrics):
+                    logger.info("Lyrics detected as English - creating additional 'en' cache entry")
+                    self.save_to_cache(title, artist, lyrics, 'en')
                 logger.info("Lyrics retrieved and cached successfully.")
             return lyrics
 
@@ -472,8 +495,7 @@ class LyricLocate:
             logger.info("Alternate language lyrics do not contain 'english' in title or artist. Not caching.")
 
 app = FastAPI()
-scraper = LyricLocate()
-spotify_fetcher = SpotifyTrackFetcher()
+lyric_locator = LyricLocate()
 
 STATIC_DIR = Path(__file__).parent.parent / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -484,44 +506,64 @@ class LyricsResponse(BaseModel):
     language: Optional[str]
     lyrics: str
 
+def validate_language(language: Optional[str]) -> Optional[str]:
+    if language:
+        sanitized = language.strip().lower()
+        if sanitized != "en":
+            raise HTTPException(status_code=400, detail="Invalid language parameter. Only 'en' is accepted.")
+        return sanitized
+    return None
+
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     return FileResponse(STATIC_DIR / "index.html")
 
 @app.get("/api/get_lyrics_from_spotify", response_model=LyricsResponse)
-def get_lyrics_from_spotify_endpoint(spotify_url: str, language: Optional[str] = None, background_tasks: BackgroundTasks = None):
-    logger.info(f"API request received for Spotify URL: '{spotify_url}'")
+def get_lyrics_from_spotify_endpoint(
+    spotify_url: str, 
+    language: Optional[str] = Query(None, pattern="^en$", description="Language code, only 'en' is accepted."),
+    background_tasks: BackgroundTasks = None
+):
+    logger.info(f"API request received for Spotify URL: '{spotify_url}' with language: '{language}'")
     
-    track_info = spotify_fetcher.get_track_info(spotify_url)
+    sanitized_language = validate_language(language)
+    
+    track_info = lyric_locator.get_track_info(spotify_url)
     if not track_info:
         raise HTTPException(status_code=400, detail="Could not extract track information from Spotify URL")
     
     title, artist = track_info
-    return get_lyrics_endpoint(title=title, artist=artist, language=language, background_tasks=background_tasks)
+    return get_lyrics_endpoint(title=title, artist=artist, language=sanitized_language, background_tasks=background_tasks)
 
 @app.get("/api/get_lyrics", response_model=LyricsResponse)
-def get_lyrics_endpoint(title: str, artist: str, language: Optional[str] = None, background_tasks: BackgroundTasks = None):
+def get_lyrics_endpoint(
+    title: str, 
+    artist: str, 
+    language: Optional[str] = Query(None, pattern="^en$", description="Language code, only 'en' is accepted."),
+    background_tasks: BackgroundTasks = None
+):
     logger.info(f"API request received for Title: '{title}', Artist: '{artist}', Language: '{language}'")
     
-    should_cache = False
-    if language is None:
-        should_cache = True
-    elif language.lower() == 'en':
-        if "english" in title.lower() or "english" in artist.lower():
-            should_cache = True
+    sanitized_language = validate_language(language)
     
-    cached = scraper.get_cached_data(title, artist, language)
+    should_cache = False
+    if sanitized_language is None:
+        should_cache = True
+    elif sanitized_language == 'en':
+        should_cache = True  # Changed condition to always cache when language is 'en'
+    
+    cached = lyric_locator.get_cached_data(title, artist, sanitized_language)
     if cached:
         logger.info("Returning cached lyrics via API.")
-        return LyricsResponse(title=title, artist=artist, language=language or "original", lyrics=cached)
+        return LyricsResponse(title=title, artist=artist, language=sanitized_language or "original", lyrics=cached)
     
-    lyrics = scraper.get_lyrics(title, artist, language, should_cache=should_cache)
+    lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=should_cache)
     if lyrics != "Lyrics not found":
-        if not scraper.is_lyrics_in_english(lyrics) and language is None and background_tasks:
+        if not lyric_locator.is_lyrics_in_english(lyrics) and sanitized_language is None and background_tasks:
             logger.info("Lyrics not in English. Scheduling alternate language search.")
-            background_tasks.add_task(scraper.search_fetch_and_cache_alternate, title, artist, language)
+            background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
         logger.info("Returning fetched lyrics via API.")
-        return LyricsResponse(title=title, artist=artist, language=language or "original", lyrics=lyrics)
+        return LyricsResponse(title=title, artist=artist, language=sanitized_language or "original", lyrics=lyrics)
     
     logger.warning("Lyrics not found. Raising HTTP 404.")
     raise HTTPException(status_code=404, detail="Lyrics not found")
