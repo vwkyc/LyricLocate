@@ -24,6 +24,11 @@ class LyricLocate:
         self.db = LyricsDatabase()
         self.spotify_handler = SpotifyHandler()
 
+        if not self.api_key:
+            logger.warning("GENIUS_CLIENT_ACCESS_TOKEN not set - lyrics searches will be limited")
+        if not (self.spotify_handler.spotify_client_id and self.spotify_handler.spotify_client_secret):
+            logger.warning("Spotify API credentials missing - Spotify URL handling will be limited")
+
     @staticmethod
     def get_cache_key(title: str, artist: str, language: str = None) -> str:
         key = f"{title.lower()}_{artist.lower()}"
@@ -147,7 +152,7 @@ class LyricLocate:
             logger.error(f"Error scraping lyrics from {url}: {e}")
             return None
 
-    def find_url_on_genius(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+    def find_genius_url_with_api(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         if not self.api_key:
             logger.info("Genius API key not provided. Skipping Genius API search.")
             return None
@@ -175,39 +180,34 @@ class LyricLocate:
             logger.error(f"Genius search failed: {e}")
         return None
 
-    def find_genius_url_using_google_if_no_genius_api(self, title: str, artist: str, language: str = "original", initial_genius_url: str = None) -> Optional[str]:
+    def find_genius_url_without_api(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         query = f"{title} {artist} genius.com lyrics"
         if language == 'en':
             query += ' english translation'
-        logger.info(f"Searching Genius via Google for: {query}")
-        params = {**self.google_params, 'q': query}
+        logger.info(f"Searching for Genius URL with query: {query}")
+        
         try:
-            response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
+            params = {**self.google_params, 'q': query}
+            response = requests.get(
+                "https://www.google.com/search",
+                headers=self.google_headers,
+                params=params
+            )
             response.raise_for_status()
+
             soup = BeautifulSoup(response.text, 'html.parser')
             for a in soup.select('a[href]'):
                 link = a['href']
                 if "genius.com" in link:
                     link_match = re.search(r'(https?://genius\.com/[^\s&]+)', link)
                     if link_match:
-                        url = link_match.group()
-
-                        if initial_genius_url and url == initial_genius_url:
-                            logger.info("Found same URL as Genius API - skipping verification")
-                            return None
-
-                        match = re.match(r'https?://genius\.com/(?P<extracted_artist>[^/]+)-(?P<extracted_title>[^/]+)-lyrics', url)
-                        if match:
-                            extracted_artist = match.group('extracted_artist').replace('-', ' ').title()
-                            extracted_title = match.group('extracted_title').replace('-', ' ').title()
-                            if self.is_match(extracted_artist, extracted_title, artist, title):
-                                lyrics = self.scrape_lyrics(url)
-                                if lyrics:
-                                    logger.info("Lyrics found via find_genius_url_using_google_if_no_genius_api matching verified.")
-                                    return lyrics
-            logger.info("No matching lyrics found via find_genius_url_using_google_if_no_genius_api.")
+                        genius_url = link_match.group()
+                        logger.info(f"Found Genius URL: {genius_url}")
+                        return genius_url
+                    
+            logger.error("Failed to find Genius URL without an API key.")
         except requests.RequestException as e:
-            logger.error(f"Google search failed: {e}")
+            logger.error(f"Error searching for Genius URL without an API key: {e}")
         return None
 
     def google_search(self, title: str, artist: str, language: str = "original") -> Optional[str]:
@@ -217,37 +217,27 @@ class LyricLocate:
         ]
         for query in queries:
             logger.info(f"Performing Google search with query: '{query}'")
-            lyrics = self.scrape_google_lyrics(query, artist_verification=(query == queries[1]), artist=artist)
-            if lyrics:
-                logger.info("Lyrics found via Google search.")
-                return lyrics
+            params = {**self.google_params, 'q': query}
+            try:
+                response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                if query == queries[1] and artist:
+                    extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_='rVusze')]
+                    if not any(self.is_match(extracted_artist, "", artist, "") for extracted_artist in extracted_artists):
+                        logger.info("Artist verification failed in Google search results.")
+                        continue
+                
+                for div in soup.select('div.ujudUb, div.PZPZlf, div[data-lyricid]'):
+                    lyrics = div.get_text(separator='\n').strip()
+                    if len(lyrics.split('\n')) > 4:
+                        if not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
+                            logger.info("Valid lyrics found in Google search results.")
+                            return self.reformat_lyrics_text(lyrics)
+            except requests.RequestException as e:
+                logger.error(f"Google scrape failed: {e}")
         logger.info("No lyrics found via Google search.")
-        return None
-
-    def scrape_google_lyrics(self, query: str, artist_verification: bool, artist: str = None) -> Optional[str]:
-        params = {**self.google_params, 'q': query}
-        try:
-            response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            if artist_verification and artist:
-                extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_='rVusze')]
-                if not any(
-                    self.is_match(extracted_artist, "", artist, "") 
-                    for extracted_artist in extracted_artists
-                ):
-                    logger.info("Artist verification failed in Google search results.")
-                    return None
-            
-            for div in soup.select('div.ujudUb, div.PZPZlf, div[data-lyricid]'):
-                lyrics = div.get_text(separator='\n').strip()
-                if len(lyrics.split('\n')) > 4:
-                    if not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
-                        logger.info("Valid lyrics found in Google search results.")
-                        return self.reformat_lyrics_text(lyrics)
-        except requests.RequestException as e:
-            logger.error(f"Google scrape failed: {e}")
         return None
 
     def get_lyrics(self, title: str, artist: str, language: str = "original", skip_google_search: bool = False, should_cache: bool = False) -> str:
@@ -257,13 +247,14 @@ class LyricLocate:
             logger.info("Returning cached lyrics.")
             return cached
 
-        genius_url = self.find_url_on_genius(title, artist, language)
+        genius_url = None
+        if self.api_key:
+            genius_url = self.find_genius_url_with_api(title, artist, language)
+        else:
+            genius_url = self.find_genius_url_without_api(title, artist, language)
+        
         lyrics = self.scrape_lyrics(genius_url) if genius_url else None
 
-        if not lyrics:
-            google_genius_result = self.find_genius_url_using_google_if_no_genius_api(title, artist, language, initial_genius_url=genius_url)
-            if google_genius_result:
-                lyrics = google_genius_result
         if not lyrics and not skip_google_search:
             lyrics = self.google_search(title, artist, language)
 
@@ -271,7 +262,6 @@ class LyricLocate:
             if should_cache:
                 self.cache(title, artist, lyrics, language)
                 logger.info("Lyrics retrieved and cached successfully.")
-                # Check if 'original' lyrics are in English and cache as 'en'
                 if language == 'original' and self.is_lyrics_in_english(lyrics):
                     self.cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")

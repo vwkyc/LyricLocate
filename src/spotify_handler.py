@@ -34,7 +34,7 @@ class SpotifyHandler:
     def extract_track_id(self, spotify_url: str) -> Optional[str]:
         try:
             base_url = spotify_url.split('?')[0] if '&' not in spotify_url else spotify_url.split('&')[0]
-            
+
             parsed = urlparse(base_url)
             if parsed.netloc not in ['open.spotify.com', 'spotify.com']:
                 logger.warning(f"Not a valid Spotify URL: {spotify_url}")
@@ -73,22 +73,18 @@ class SpotifyHandler:
                 track = response.json()
                 title = track["name"]
                 artist = ", ".join(artist["name"] for artist in track["artists"])
-                
-                # Cache the result
                 self.cache_spotify_track(spotify_url, title, artist)
                 return title, artist
-                
+
             except Exception as e:
                 logger.error(f"Failed to get track info from Spotify API: {e}")
-        
-        # If API fails, fallback to web scraping
+
         logger.warning("Falling back to web scraping for Spotify track info")
         try:
             response = requests.get(spotify_url)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Extract from meta tags
             title_tag = soup.find('meta', property='og:title')
             artist_tag = soup.find('meta', property='og:description')
             
@@ -96,13 +92,12 @@ class SpotifyHandler:
                 title = title_tag.get('content', '').split(' - ')[0].strip()
                 artist = artist_tag.get('content', '').split(' · ')[0].strip()
                 if title and artist:
-                    # Cache the scraped result
                     self.cache_spotify_track(spotify_url, title, artist)
                     return title, artist
-                    
+
         except Exception as e:
             logger.error(f"Failed to scrape track info from Spotify page: {e}")
-        
+
         return None
 
     def get_cached_spotify_track(self, spotify_url: str) -> Optional[Tuple[str, str]]:
