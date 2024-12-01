@@ -67,7 +67,6 @@ def get_lyrics_endpoint(
     background_tasks: BackgroundTasks = None
 ):
     logger.info(f"API request received for Title: '{title}', Artist: '{artist}', Language: '{language}'")
-    
     sanitized_language = validate_language(language)
     
     try:
@@ -90,57 +89,36 @@ def get_lyrics_endpoint(
                     status_code=404,
                     content={"detail": "English lyrics not found"}
                 )
-            
-            if background_tasks:
-                if sanitized_language == 'original' and not lyric_locator.get_cached_data(title, artist, 'en'):
-                    background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
-                elif sanitized_language == 'en' and not lyric_locator.get_cached_data(title, artist, 'original'):
-                    background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
-                    
             return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=cached)
         
         # If not in cache, fetch new lyrics
-        lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=False)
+        lyrics = lyric_locator.get_lyrics(title, artist, sanitized_language, should_cache=True)
         if lyrics != "Lyrics not found":
-            if sanitized_language == 'en':
-                if not lyric_locator.is_lyrics_in_english(lyrics):
-                    if background_tasks:
-                        background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
-                        background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
-                    return JSONResponse(
-                        status_code=404,
-                        content={"detail": "English lyrics not found"}
-                    )
+            # If original lyrics found but not in English, schedule English translation fetch
+            if sanitized_language == 'original' and not lyric_locator.is_lyrics_in_english(lyrics) and background_tasks:
+                background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
                 
-                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
-                
-                if background_tasks and not lyric_locator.get_cached_data(title, artist, 'original'):
+            if sanitized_language == 'en' and not lyric_locator.is_lyrics_in_english(lyrics):
+                if background_tasks:
+                    background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
                     background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
-            else:
-                lyric_locator.save_to_cache(title, artist, lyrics, sanitized_language)
-                
-                if lyric_locator.is_lyrics_in_english(lyrics):
-                    lyric_locator.save_to_cache(title, artist, lyrics, 'en')
-                    logger.info("Original lyrics are in English. Cached as 'en' as well.")
-                elif background_tasks and not lyric_locator.get_cached_data(title, artist, 'en'):
-                    background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
-            
+                return JSONResponse(
+                    status_code=404,
+                    content={"detail": "English lyrics not found"}
+                )
             return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
         
-        # Schedule background tasks and return 404
+        # Schedule background tasks only if lyrics not found
         if background_tasks:
             if sanitized_language == 'en':
                 background_tasks.add_task(lyric_locator.fetch_english_lyrics, title, artist)
                 background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
             else:
                 background_tasks.add_task(lyric_locator.fetch_original_lyrics, title, artist)
-                background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
-        
         return JSONResponse(
             status_code=404,
             content={"detail": "Lyrics not found"}
         )
-        
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         return JSONResponse(

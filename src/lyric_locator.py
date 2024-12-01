@@ -242,11 +242,27 @@ class LyricLocate:
 
     def get_lyrics(self, title: str, artist: str, language: str = "original", skip_google_search: bool = False, should_cache: bool = False) -> str:
         logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
+        
+        # Check cache first
         cached = self.get_cached_data(title, artist, language)
         if cached:
             logger.info("Returning cached lyrics.")
             return cached
 
+        # For English requests, first try to get original lyrics
+        if language == 'en':
+            # Try to get original lyrics first
+            original_lyrics = self.get_lyrics(title, artist, 'original', skip_google_search, should_cache)
+            if original_lyrics and original_lyrics != "Lyrics not found":
+                if self.is_lyrics_in_english(original_lyrics):
+                    if should_cache:
+                        self.save_to_cache(title, artist, original_lyrics, 'en')
+                        logger.info("Original lyrics are in English. Cached as 'en'.")
+                    return original_lyrics
+                # If original lyrics aren't in English, continue with translation search
+                logger.info("Original lyrics found but not in English. Searching for translation.")
+        
+        # Regular lyrics fetching process
         genius_url = None
         if self.api_key:
             genius_url = self.find_genius_url_with_api(title, artist, language)
@@ -265,6 +281,9 @@ class LyricLocate:
                 if language == 'original' and self.is_lyrics_in_english(lyrics):
                     self.save_to_cache(title, artist, lyrics, 'en')
                     logger.info("Original lyrics are in English. Cached as 'en' as well.")
+                elif language == 'en' and not self.is_lyrics_in_english(lyrics):
+                    logger.info("Retrieved lyrics are not in English.")
+                    return "Lyrics not found"
             return lyrics
 
         return "Lyrics not found"
