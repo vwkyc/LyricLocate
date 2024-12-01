@@ -84,6 +84,11 @@ class LyricLocate:
             return False
 
     def reformat_lyrics_text(self, lyrics: str) -> str:
+        unwanted_phrases = [
+            "Something went wrong.",
+            "Please try again.",
+            "Translate to English"
+        ]
         patterns = [
             (r'\[\s*([^]]*?)\s*&\s*(?:\r?\n\s*)?([^]]*?)\s*\]', r'[\1 & \2]'),
             (r'\[([^]]+?):\s*([^]]+?)\s*&\s*(?:\r?\n\s*)?([^]]+?)\s*\]', r'[\1: \2 & \3]'),
@@ -109,7 +114,13 @@ class LyricLocate:
         ]
         for pattern, repl in patterns:
             lyrics = re.sub(pattern, repl, lyrics)
-        return lyrics.strip()
+        
+        for phrase in unwanted_phrases:
+            if phrase in lyrics:
+                lyrics = lyrics.split(phrase)[0].strip()
+                break
+        
+        return lyrics
 
     def scrape_lyrics(self, url: str) -> Optional[str]:
         if not url:
