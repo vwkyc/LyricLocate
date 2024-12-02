@@ -181,7 +181,7 @@ class LyricLocate:
             logger.error(f"Search failed: {e}")
         return None
 
-    def google_search(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+    def scrape_google(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         queries = [
             f"{self.clean_title(title)} {self.clean_artists(artist)[0]} lyrics",
             f"{self.clean_title(title)} lyrics"
@@ -237,7 +237,7 @@ class LyricLocate:
         lyrics = self.scrape_lyrics(genius_url) if genius_url else None
 
         if not lyrics and not skip_google_search:
-            lyrics = self.google_search(title, artist, language)
+            lyrics = self.scrape_google(title, artist, language)
 
         if lyrics and lyrics != "Lyrics not found":
             if language == 'en':
