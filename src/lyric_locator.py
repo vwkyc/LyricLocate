@@ -125,6 +125,12 @@ class LyricLocate:
             response = requests.get(url)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
+
+            not_released_message = soup.find(string="Lyrics for this song have yet to be released. Please check back once the song has been released.")
+            if not_released_message:
+                logger.info("Lyrics have not been released yet.")
+                return "Lyrics not found"
+
             lyrics_containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
             if not lyrics_containers:
                 if soup.find("div", string="This song is an instrumental"):
