@@ -207,6 +207,35 @@ class LyricLocate:
                 logger.error(f"Google scrape failed: {e}")
         return None
 
+    def scrape_musixmatch(self, title: str, artist: str) -> Optional[str]:
+        query = f"{title} {artist} lyrics site:musixmatch.com/lyrics"
+        logger.info(f"Performing musixmatch search with query: '{query}'")
+        params = {**self.google_params, 'q': query}
+        
+        try:
+            response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, 'html.parser')
+            for a in soup.select('a[href]'):
+                link = a['href']
+                if "musixmatch.com/lyrics" in link:
+                    url_match = re.search(r'(https?://www\.musixmatch\.com/lyrics/[^\s&]+)', link)
+                    if url_match:
+                        lyrics_url = url_match.group()
+                        logger.info(f"Found Musixmatch URL: {lyrics_url}")
+                        
+                        lyrics_response = requests.get(lyrics_url, headers=self.google_headers)
+                        lyrics_response.raise_for_status()
+                        lyrics_soup = BeautifulSoup(lyrics_response.text, 'html.parser')
+                        lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
+                        if lyrics_spans:
+                            lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
+                            return self.reformat_lyrics_text(lyrics)
+                        return None    
+        except requests.RequestException as e:
+            logger.error(f"Musixmatch scrape failed: {e}")
+        return None
+
     def get_lyrics(
         self,
         title: str,
@@ -254,6 +283,25 @@ class LyricLocate:
                 if should_cache:
                     self.save_to_cache(title, artist, lyrics, 'original')
                     # If the original lyrics are in English, also cache them under 'en'
+                    if self.is_lyrics_in_english(lyrics):
+                        self.save_to_cache(title, artist, lyrics, 'en')
+                return lyrics
+
+        if not lyrics:
+            lyrics = self.scrape_musixmatch(title, artist)
+
+        if lyrics and lyrics != "Lyrics not found":
+            if language == 'en':
+                if self.is_lyrics_in_english(lyrics):
+                    if should_cache:
+                        self.save_to_cache(title, artist, lyrics, 'en')
+                    return lyrics
+                else:
+                    logger.info("Fetched lyrics are not in English. Not caching under 'en'.")
+                    return "Lyrics not found"
+            else:
+                if should_cache:
+                    self.save_to_cache(title, artist, lyrics, 'original')
                     if self.is_lyrics_in_english(lyrics):
                         self.save_to_cache(title, artist, lyrics, 'en')
                 return lyrics
