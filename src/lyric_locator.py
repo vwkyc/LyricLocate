@@ -23,6 +23,7 @@ class LyricLocate:
         self.google_params = {'hl': 'en'}
         self.db = LyricsDatabase()
         self.spotify_handler = SpotifyHandler()
+        self.skip_services_for_en = ['musixmatch']  # Services to skip for English search
 
         if not self.api_key:
             logger.warning("GENIUS_CLIENT_ACCESS_TOKEN not set - lyrics searches will be limited")
@@ -218,10 +219,9 @@ class LyricLocate:
         return None
 
     def scrape_musixmatch(self, title: str, artist: str) -> Optional[str]:
+        logger.info(f"Scraping Musixmatch for Title: '{title}', Artist: '{artist}'")
         query = f"{title} {artist} lyrics site:musixmatch.com/lyrics"
-        logger.info(f"Performing musixmatch search with query: '{query}'")
         params = {**self.google_params, 'q': query}
-        
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
             response.raise_for_status()
@@ -233,7 +233,6 @@ class LyricLocate:
                     if url_match:
                         lyrics_url = url_match.group()
                         logger.info(f"Found Musixmatch URL: {lyrics_url}")
-                        
                         lyrics_response = requests.get(lyrics_url, headers=self.google_headers)
                         lyrics_response.raise_for_status()
                         lyrics_soup = BeautifulSoup(lyrics_response.text, 'html.parser')
@@ -241,7 +240,7 @@ class LyricLocate:
                         if lyrics_spans:
                             lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
                             return self.reformat_lyrics_text(lyrics)
-                        return None    
+                        return None
         except requests.RequestException as e:
             logger.error(f"Musixmatch scrape failed: {e}")
         return None
@@ -251,19 +250,18 @@ class LyricLocate:
         title: str,
         artist: str,
         language: str = "original",
-        skip_google_search: bool = False,
         should_cache: bool = False,
         attempted_remix_removal: bool = False
     ) -> str:
         logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
-        
+
         cached = self.get_cached_data(title, artist, language)
         if cached and cached != "Lyrics not found":
             return cached
 
         if language == 'en':
             # First, attempt to get the original lyrics and check if they are in English
-            original_lyrics = self.get_lyrics(title, artist, 'original', skip_google_search, should_cache)
+            original_lyrics = self.get_lyrics(title, artist, 'original', should_cache)
             if original_lyrics and original_lyrics != "Lyrics not found":
                 if self.is_lyrics_in_english(original_lyrics):
                     if should_cache:
@@ -276,7 +274,7 @@ class LyricLocate:
         genius_url = self.find_genius_url(title, artist, language)
         lyrics = self.scrape_lyrics(genius_url) if genius_url else None
 
-        if not lyrics and not skip_google_search:
+        if not lyrics:
             lyrics = self.scrape_google(title, artist, language)
 
         if lyrics and lyrics != "Lyrics not found":
@@ -298,7 +296,8 @@ class LyricLocate:
                         self.save_to_cache(title, artist, lyrics, 'en')
                 return lyrics
 
-        if not lyrics:
+        # Skip Musixmatch for English search if specified
+        if lyrics is None and (language != 'en' or 'musixmatch' not in self.skip_services_for_en):
             lyrics = self.scrape_musixmatch(title, artist)
 
         if lyrics and lyrics != "Lyrics not found":
@@ -321,7 +320,7 @@ class LyricLocate:
             new_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
             if new_title != title:
                 logger.info(f"No lyrics found. Retrying with title without remix: '{new_title}'")
-                lyrics = self.get_lyrics(new_title, artist, language, skip_google_search, should_cache, attempted_remix_removal=True)
+                lyrics = self.get_lyrics(new_title, artist, language, should_cache, attempted_remix_removal=True)
                 if lyrics and lyrics != "Lyrics not found" and should_cache:
                     self.save_to_cache(title, artist, lyrics, language)
                 return lyrics
@@ -330,37 +329,15 @@ class LyricLocate:
 
     def fetch_lyrics_background(self, title: str, artist: str, language: str):
         logger.info(f"Background Task: Fetching {language} lyrics for Title: '{title}', Artist: '{artist}'")
-        
+
         if 'remix' in title.lower():
             clean_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
             if clean_title != title:
                 logger.info(f"Background Task: Removing remix from title. New title: '{clean_title}'")
                 title = clean_title
 
-        lyrics = self.get_lyrics(title, artist, language, skip_google_search=False, should_cache=True, attempted_remix_removal=True)
+        lyrics = self.get_lyrics(title, artist, language, should_cache=True, attempted_remix_removal=True)
         if lyrics and lyrics != "Lyrics not found":
             logger.info(f"Background Task: {language.capitalize()} lyrics fetched and cached successfully.")
         else:
             logger.warning(f"Background Task: {language.capitalize()} lyrics could not be fetched.")
-
-    def search_fetch_and_cache_alternate(self, title: str, artist: str, language: str):
-        alternate = 'en'
-        logger.info(f"Background Task: Fetching and caching alternate language lyrics: '{alternate}'")
-        cached_en = self.get_cached_data(title, artist, 'en')
-        if cached_en:
-            logger.info("Background Task: 'en' lyrics are already cached.")
-            return
-
-        if 'remix' in title.lower():
-            clean_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
-            if clean_title != title:
-                logger.info(f"Background Task: Removing remix from title. New title: '{clean_title}'")
-                title = clean_title
-
-        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=False, should_cache=False, attempted_remix_removal=True)
-        if lyrics and lyrics != "Lyrics not found":
-            if self.is_lyrics_in_english(lyrics):
-                self.save_to_cache(title, artist, lyrics, alternate)
-                logger.info("Background Task: English lyrics verified and cached successfully.")
-        else:
-            logger.info("Background Task: Alternate language lyrics not found.")
