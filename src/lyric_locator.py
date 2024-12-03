@@ -58,6 +58,11 @@ class LyricLocate:
 
     def is_match(self, extracted_artist: str, extracted_title: str, expected_artist: str, expected_title: str) -> bool:
         logger.info(f"Comparing '{extracted_artist}', '{extracted_title}' with '{expected_artist}', '{expected_title}'")
+
+        if "(instrumental)" in extracted_title.lower():
+            logger.info("Ignoring instrumental version.")
+            return False
+
         query_artists = self.clean_artists(expected_artist)
         query_title = self.clean_title(expected_title)
         title_no_paren = re.sub(r'\s*\([^)]*\)', '', extracted_title).strip()
