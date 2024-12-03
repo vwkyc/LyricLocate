@@ -3,7 +3,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.68.0+-green.svg)](https://fastapi.tiangolo.com)
 
-This project is a FastAPI-based service that fetches song lyrics from the web. It combines multiple sources including Genius API, Spotify, and Google search to find and scrape lyrics. The lyrics are cached in a local SQLite database to improve performance and reduce redundant requests.
+This project is a FastAPI-based service that fetches song lyrics from the web. It combines multiple sources including Genius API, Spotify, Musixmatch, and Google search to find and scrape lyrics. The lyrics are cached in a local SQLite database to improve performance and reduce redundant requests.
 
 ## Features
 
@@ -11,7 +11,7 @@ This project is a FastAPI-based service that fetches song lyrics from the web. I
 - Fetch lyrics directly from Spotify track URLs
 - Works with or without Genius API key (falls back to web scraping)
 - Smart caching system using SQLite database
-- Multiple lyrics sources (Genius API, Spotify, Google Search)
+- Multiple lyrics sources (Genius API, Spotify, Musixmatch, Google Search)
 - Support for different languages, including English translations
 - Automatic alternate language lyrics detection and caching
 - Modern web frontend
