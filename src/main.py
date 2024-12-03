@@ -73,11 +73,15 @@ def get_lyrics_endpoint(
                 if background_tasks:
                     background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, 'en')
                 return JSONResponse(status_code=404, content={"detail": "English lyrics not found"})
-            if sanitized_language == 'original' and not lyric_locator.is_lyrics_in_english(lyrics) and background_tasks:
-                background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, 'en')
+            if sanitized_language == 'original':
+                if not lyric_locator.is_lyrics_in_english(lyrics):
+                    if background_tasks:
+                        background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, 'en')
+                    return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
+                return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
             return LyricsResponse(title=title, artist=artist, language=sanitized_language, lyrics=lyrics)
 
-        if background_tasks:
+        if background_tasks and sanitized_language == 'en':
             background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, sanitized_language)
         return JSONResponse(status_code=404, content={"detail": "Lyrics not found"})
     except Exception as e:
