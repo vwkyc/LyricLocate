@@ -322,7 +322,14 @@ class LyricLocate:
 
     def fetch_lyrics_background(self, title: str, artist: str, language: str):
         logger.info(f"Background Task: Fetching {language} lyrics for Title: '{title}', Artist: '{artist}'")
-        lyrics = self.get_lyrics(title, artist, language, skip_google_search=False, should_cache=True)
+        
+        if 'remix' in title.lower():
+            clean_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
+            if clean_title != title:
+                logger.info(f"Background Task: Removing remix from title. New title: '{clean_title}'")
+                title = clean_title
+
+        lyrics = self.get_lyrics(title, artist, language, skip_google_search=False, should_cache=True, attempted_remix_removal=True)
         if lyrics and lyrics != "Lyrics not found":
             logger.info(f"Background Task: {language.capitalize()} lyrics fetched and cached successfully.")
         else:
@@ -335,7 +342,14 @@ class LyricLocate:
         if cached_en:
             logger.info("Background Task: 'en' lyrics are already cached.")
             return
-        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=False, should_cache=False)
+
+        if 'remix' in title.lower():
+            clean_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
+            if clean_title != title:
+                logger.info(f"Background Task: Removing remix from title. New title: '{clean_title}'")
+                title = clean_title
+
+        lyrics = self.get_lyrics(title, artist, alternate, skip_google_search=False, should_cache=False, attempted_remix_removal=True)
         if lyrics and lyrics != "Lyrics not found":
             if self.is_lyrics_in_english(lyrics):
                 self.save_to_cache(title, artist, lyrics, alternate)

@@ -81,7 +81,7 @@ def get_lyrics_endpoint(
         if background_tasks:
             background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, sanitized_language)
             if sanitized_language == 'en':
-                background_tasks.add_task(lyric_locator.fetch_lyrics_background, title, artist, 'original')
+                background_tasks.add_task(lyric_locator.search_fetch_and_cache_alternate, title, artist, sanitized_language)
         return JSONResponse(status_code=404, content={"detail": "Lyrics not found"})
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
