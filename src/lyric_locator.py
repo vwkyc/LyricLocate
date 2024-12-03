@@ -62,7 +62,7 @@ class LyricLocate:
         query_title = self.clean_title(expected_title)
         title_no_paren = re.sub(r'\s*\([^)]*\)', '', extracted_title).strip()
 
-        artist_in_title = any(artist.lower() in title_no_paren.lower() for artist in query_artists)
+        artist_in_title = any(artist.lower() in extracted_artist.lower() for artist in query_artists)
         title_in_result = query_title.lower() in title_no_paren.lower()
 
         if artist_in_title and title_in_result:
@@ -195,7 +195,7 @@ class LyricLocate:
                 soup = BeautifulSoup(response.text, 'html.parser')
 
                 if query == queries[1] and artist:
-                    extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_='rVusze')]
+                    extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_=['rVusze', 'iAIpCb PZPZlf'])]
                     if not any(self.is_match(extracted_artist, "", artist, "") for extracted_artist in extracted_artists):
                         continue
 
