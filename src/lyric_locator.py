@@ -191,6 +191,11 @@ class LyricLocate:
             f"{self.clean_title(title)} {self.clean_artists(artist)[0]} lyrics",
             f"{self.clean_title(title)} lyrics"
         ]
+        if language == 'en':
+            queries = [
+                f"{self.clean_title(title)} {self.clean_artists(artist)[0]} english translation lyrics",
+                f"{self.clean_title(title)} english translation lyrics"
+            ]
         for query in queries:
             logger.info(f"Performing Google search with query: '{query}'")
             params = {**self.google_params, 'q': query}
@@ -199,7 +204,7 @@ class LyricLocate:
                 response.raise_for_status()
                 soup = BeautifulSoup(response.text, 'html.parser')
 
-                if query == queries[1] and artist:
+                if query.endswith('lyrics') and artist:
                     extracted_artists = [div.get_text().strip() for div in soup.find_all('div', class_=['rVusze', 'iAIpCb PZPZlf'])]
                     if not any(self.is_match(extracted_artist, "", artist, "") for extracted_artist in extracted_artists):
                         continue
@@ -316,7 +321,10 @@ class LyricLocate:
             new_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
             if new_title != title:
                 logger.info(f"No lyrics found. Retrying with title without remix: '{new_title}'")
-                return self.get_lyrics(new_title, artist, language, skip_google_search, should_cache, attempted_remix_removal=True)
+                lyrics = self.get_lyrics(new_title, artist, language, skip_google_search, should_cache, attempted_remix_removal=True)
+                if lyrics and lyrics != "Lyrics not found" and should_cache:
+                    self.save_to_cache(title, artist, lyrics, language)
+                return lyrics
 
         return "Lyrics not found"
 
