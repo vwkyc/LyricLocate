@@ -247,7 +247,8 @@ class LyricLocate:
         artist: str,
         language: str = "original",
         skip_google_search: bool = False,
-        should_cache: bool = False
+        should_cache: bool = False,
+        attempted_remix_removal: bool = False
     ) -> str:
         logger.info(f"Getting lyrics for Title: '{title}', Artist: '{artist}', Language: '{language}'")
         
@@ -310,6 +311,12 @@ class LyricLocate:
                     if self.is_lyrics_in_english(lyrics):
                         self.save_to_cache(title, artist, lyrics, 'en')
                 return lyrics
+
+        if not lyrics and not attempted_remix_removal and 'remix' in title.lower():
+            new_title = re.sub(r'\s*\(.*remix.*\)', '', title, flags=re.IGNORECASE).strip()
+            if new_title != title:
+                logger.info(f"No lyrics found. Retrying with title without remix: '{new_title}'")
+                return self.get_lyrics(new_title, artist, language, skip_google_search, should_cache, attempted_remix_removal=True)
 
         return "Lyrics not found"
 
