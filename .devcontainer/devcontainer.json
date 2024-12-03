@@ -1,0 +1,25 @@
+{
+    "image": "mcr.microsoft.com/devcontainers/python:3",
+    "hostRequirements": {
+        "cpus": 2
+    },
+    "waitFor": "onCreateCommand",
+    "updateContentCommand": "",
+    "postCreateCommand": "sudo apt update && sudo apt upgrade -y",
+    "customizations": {
+      "codespaces": {
+        "openFiles": []
+      },
+    "vscode": {
+        "extensions": [
+            "ms-python.python",
+            "github.copilot"
+        ],
+        "settings": {
+            "git.enableSmartCommit": true,
+            "git.confirmSync": false,
+            "workbench.colorTheme": "Default Dark+"
+        }
+    }
+}
+}
