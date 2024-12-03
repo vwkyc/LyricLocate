@@ -239,6 +239,7 @@ class LyricLocate:
         logger.info(f"Scraping Musixmatch for Title: '{title}', Artist: '{artist}'")
         query = f"{title} {artist} lyrics site:musixmatch.com/lyrics"
         params = {**self.google_params, 'q': query}
+        processed_urls = set()
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
             response.raise_for_status()
@@ -249,15 +250,20 @@ class LyricLocate:
                     url_match = re.search(r'(https?://www\.musixmatch\.com/lyrics/[^\s&]+)', link)
                     if url_match:
                         lyrics_url = url_match.group()
+                        if lyrics_url in processed_urls:
+                            continue
+                        processed_urls.add(lyrics_url)
                         logger.info(f"Found Musixmatch URL: {lyrics_url}")
                         lyrics_response = requests.get(lyrics_url, headers=self.google_headers)
                         lyrics_response.raise_for_status()
                         lyrics_soup = BeautifulSoup(lyrics_response.text, 'html.parser')
-                        lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
-                        if lyrics_spans:
-                            lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
-                            return self.reformat_lyrics_text(lyrics)
-                        return None
+                        title_element = lyrics_soup.find(attrs={"data-testid": "lyrics-track-title"})
+                        if title_element and title_element.get_text().strip().lower() == title.lower():
+                            lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
+                            if lyrics_spans:
+                                lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
+                                return self.reformat_lyrics_text(lyrics)
+                            return None
         except requests.RequestException as e:
             logger.error(f"Musixmatch scrape failed: {e}")
         return None
