@@ -8,6 +8,7 @@ misc/*.json
 misc/*.html
 misc/*.csv
 legacy.py
+test.py
 
 # C extensions
 *.so

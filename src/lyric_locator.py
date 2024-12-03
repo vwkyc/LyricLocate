@@ -151,15 +151,17 @@ class LyricLocate:
     def find_genius_url(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         if self.api_key:
             search_url = "https://api.genius.com/search"
-            params = {'q': f"{title} {artist}"}
+            query = f"{title} {artist}"
             if language == 'en':
-                params['q'] += ' english translation'
+                query += ' english translation'
+            params = {'q': query}
             headers = self.genius_headers
         else:
             search_url = "https://www.google.com/search"
-            params = {**self.google_params, 'q': f"{title} {artist} genius.com lyrics"}
+            query = f"{title} {artist} genius.com lyrics"
             if language == 'en':
-                params['q'] += ' english translation'
+                query += ' english translation'
+            params = {**self.google_params, 'q': query}
             headers = self.google_headers
 
         logger.info(f"Searching for Genius URL with query: {params['q']}")
@@ -175,6 +177,21 @@ class LyricLocate:
                     result = hit['result']
                     if self.is_match(result['primary_artist']['name'], result['title'], artist, title):
                         return result['url']
+                # Retry with first artist if initial search fails
+                first_artist = self.clean_artists(artist)[0] if self.clean_artists(artist) else ""
+                if first_artist:
+                    retry_query = f"{title} {first_artist}"
+                    if language == 'en':
+                        retry_query += ' english translation'
+                    logger.info(f"Retrying search with first artist: {first_artist}, query: {retry_query}")
+                    params['q'] = retry_query
+                    response = requests.get(search_url, headers=headers, params=params)
+                    response.raise_for_status()
+                    hits = response.json().get("response", {}).get("hits", [])
+                    for hit in hits:
+                        result = hit['result']
+                        if self.is_match(result['primary_artist']['name'], result['title'], first_artist, title):
+                            return result['url']
             else:
                 soup = BeautifulSoup(response.text, 'html.parser')
                 for a in soup.select('a[href]'):
