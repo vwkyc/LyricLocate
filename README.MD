@@ -2,7 +2,7 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.68.0+-green.svg)](https://fastapi.tiangolo.com)
-[![Better Stack Badge](https://uptime.betterstack.com/status-badges/v1/monitor/1oypl.svg)](https://kmst.betteruptime.com/)
+[![Better Stack Badge](https://uptime.betterstack.com/status-badges/v1/monitor/1oypl.svg)](https://vwkyc.betteruptime.com/)
 
 This project is a FastAPI-based service that fetches song lyrics from the web. It combines multiple sources including Genius API, Spotify, Musixmatch, and Google search to find and scrape lyrics. The lyrics are cached in a local SQLite database to improve performance and reduce redundant requests.
 
