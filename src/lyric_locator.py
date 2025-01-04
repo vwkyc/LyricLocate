@@ -90,7 +90,8 @@ class LyricLocate:
         unwanted_phrases = [
             "Something went wrong.",
             "Please try again.",
-            "Translate to English"
+            "Translate to English",
+            "Musixmatch"
         ]
         patterns = [
             (r'\[\s*([^]]*?)\s*&\s*(?:\r?\n\s*)?([^]]*?)\s*\]', r'[\1 & \2]'),
@@ -121,7 +122,9 @@ class LyricLocate:
             if phrase in lyrics:
                 lyrics = lyrics.split(phrase)[0].strip()
                 break
-        return lyrics
+        lyrics_lines = lyrics.split('\n')
+        lyrics_lines = [line for line in lyrics_lines if not line.startswith("Source:") and not line.startswith("Songwriters:")]
+        return '\n'.join(lyrics_lines)
 
     def scrape_lyrics(self, url: str) -> Optional[str]:
         if not url:
