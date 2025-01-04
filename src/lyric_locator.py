@@ -208,6 +208,7 @@ class LyricLocate:
         return None
 
     def scrape_google(self, title: str, artist: str, language: str = "original") -> Optional[str]:
+        problematic_keywords = ["Genres", "Dance-pop", "Electronic dance music", "K-pop", "Spotify", "Apple Music", "YouTube", "YouTube Music", "Deezer", "Artist", "Album"]
         queries = [
             f"{self.clean_title(title)} {self.clean_artists(artist)[0]} lyrics",
             f"{self.clean_title(title)} lyrics"
@@ -232,8 +233,15 @@ class LyricLocate:
 
                 for div in soup.select('div.ujudUb, div.PZPZlf, div[data-lyricid]'):
                     lyrics = div.get_text(separator='\n').strip()
-                    if len(lyrics.split('\n')) > 4 and not any(keyword in lyrics for keyword in ["Spotify", "YouTube", "Album"]):
-                        return self.reformat_lyrics_text(lyrics)
+                    if len(lyrics.split('\n')) > 4: # If the content has more than N lines, it is likely to be actual lyrics
+                        found_keywords = [keyword for keyword in problematic_keywords if keyword in lyrics]
+                        if len(found_keywords) >= 3:
+                            logger.info(f"Skipping lyrics due to problematic keywords: {found_keywords}")
+                            logger.info(f"Problematic lyrics: {lyrics}")
+                            break  # Skip to the next query
+                        logger.info(f"Scraped lyrics: {lyrics}")  # Log the scraped lyrics
+                        formatted_lyrics = self.reformat_lyrics_text(lyrics)
+                        return formatted_lyrics
             except requests.RequestException as e:
                 logger.error(f"Google scrape failed: {e}")
         return None
