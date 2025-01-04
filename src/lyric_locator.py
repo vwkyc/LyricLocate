@@ -247,8 +247,8 @@ class LyricLocate:
         return None
 
     def scrape_musixmatch(self, title: str, artist: str) -> Optional[str]:
-        logger.info(f"Scraping Musixmatch for Title: '{title}', Artist: '{artist}'")
         query = f"{title} {artist} lyrics site:musixmatch.com/lyrics"
+        logger.info(f"Searching with '{query}' on google")
         params = {**self.google_params, 'q': query}
         processed_urls = set()
         try:
