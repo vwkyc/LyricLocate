@@ -8,6 +8,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from database import LyricsDatabase
 from spotify_handler import SpotifyHandler
+from urllib.parse import unquote
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,6 @@ class LyricLocate:
         self.google_params = {'hl': 'en'}
         self.db = LyricsDatabase()
         self.spotify_handler = SpotifyHandler()
-        self.skip_services_for_en = ['musixmatch']  # Services to skip for English search
 
         if not self.api_key:
             logger.warning("GENIUS_CLIENT_ACCESS_TOKEN not set - lyrics searches will be limited")
@@ -36,6 +36,16 @@ class LyricLocate:
         if language:
             key += f"_{language.lower()}"
         return hashlib.md5(key.encode()).hexdigest()
+    
+    @staticmethod
+    def normalize_url(url: str) -> str:
+        return unquote(url)
+    
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        text = re.sub(r'\([^)]*\)', '', text)
+        text = re.sub(r'[^\w\s\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]', '', text)
+        return text.lower().strip()
 
     @staticmethod
     def clean_title(title: str) -> str:
@@ -86,7 +96,7 @@ class LyricLocate:
 
         return title_match_ratio > 0.6 and artist_match_ratio > 0.45
 
-    def reformat_lyrics_text(self, lyrics: str) -> str:
+    def reformat_lyrics_text(self, lyrics: str, language: str = None) -> str:
         unwanted_phrases = [
             "Something went wrong.",
             "Please try again.",
@@ -124,6 +134,10 @@ class LyricLocate:
                 break
         lyrics_lines = lyrics.split('\n')
         lyrics_lines = [line for line in lyrics_lines if not line.startswith("Source:") and not line.startswith("Songwriters:")]
+
+        if language == 'en':
+            lyrics_lines = [line for line in lyrics_lines if all(ord(c) < 128 for c in line)]
+
         return '\n'.join(lyrics_lines)
 
     def scrape_lyrics(self, url: str) -> Optional[str]:
@@ -167,7 +181,7 @@ class LyricLocate:
             params = {**self.google_params, 'q': query}
             headers = self.google_headers
 
-        logger.info(f"Searching for Genius URL with query: {params['q']}")
+        logger.info(f"Searching for Genius URL on google with query: {params['q']}")
         try:
             response = requests.get(search_url, headers=headers, params=params)
             if response.status_code == 429:
@@ -240,44 +254,60 @@ class LyricLocate:
                             logger.info(f"Problematic lyrics: {lyrics}")
                             break  # Skip to the next query
                         logger.info(f"Scraped lyrics: {lyrics}")  # Log the scraped lyrics
-                        formatted_lyrics = self.reformat_lyrics_text(lyrics)
+                        formatted_lyrics = self.reformat_lyrics_text(lyrics, language)
                         return formatted_lyrics
             except requests.RequestException as e:
                 logger.error(f"Google scrape failed: {e}")
         return None
 
-    def scrape_musixmatch(self, title: str, artist: str) -> Optional[str]:
+    def scrape_musixmatch(self, title: str, artist: str, language: str = "original") -> Optional[str]:
         query = f"{title} {artist} lyrics site:musixmatch.com/lyrics"
-        logger.info(f"Searching with '{query}' on google")
+        if language == 'en':
+            query += " english translation"
+        logger.info(f"Searching '{query}' on google")
         params = {**self.google_params, 'q': query}
-        processed_urls = set()
+        
         try:
             response = requests.get("https://www.google.com/search", headers=self.google_headers, params=params)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, 'html.parser')
+            
             for a in soup.select('a[href]'):
                 link = a['href']
                 if "musixmatch.com/lyrics" in link:
                     url_match = re.search(r'(https?://www\.musixmatch\.com/lyrics/[^\s&]+)', link)
                     if url_match:
-                        lyrics_url = url_match.group()
-                        if lyrics_url in processed_urls:
-                            continue
-                        processed_urls.add(lyrics_url)
+                        lyrics_url = unquote(url_match.group())
+                        
+                        if language != 'en':
+                            lyrics_url = re.sub(r'/translation/.*$', '', lyrics_url)
+                        
                         logger.info(f"Found Musixmatch URL: {lyrics_url}")
-                        lyrics_response = requests.get(lyrics_url, headers=self.google_headers)
-                        lyrics_response.raise_for_status()
-                        lyrics_soup = BeautifulSoup(lyrics_response.text, 'html.parser')
-                        title_element = lyrics_soup.find(attrs={"data-testid": "lyrics-track-title"})
-                        if title_element and title_element.get_text().strip().lower() == title.lower():
-                            lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
-                            if lyrics_spans:
-                                lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
-                                return self.reformat_lyrics_text(lyrics)
-                            return None
+                        try:
+                            lyrics_response = requests.get(lyrics_url, headers=self.google_headers)
+                            lyrics_response.raise_for_status()
+                            lyrics_soup = BeautifulSoup(lyrics_response.text, 'html.parser')
+                            
+                            # Simple fuzzy match on title
+                            title_element = lyrics_soup.find(attrs={"data-testid": "lyrics-track-title"})
+                            if title_element:
+                                page_title = title_element.get_text().lower()
+                                search_title = title.lower()
+                                title_ratio = SequenceMatcher(None, page_title, search_title).ratio()
+                                logger.info(f"Title match ratio: {title_ratio}")
+                                
+                                if title_ratio > 0.6:
+                                    lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
+                                    if lyrics_spans:
+                                        lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
+                                        return self.reformat_lyrics_text(lyrics, language)
+                        except requests.RequestException as e:
+                            logger.error(f"Error fetching lyrics from {lyrics_url}: {e}")
+                            continue
+            return None
         except requests.RequestException as e:
             logger.error(f"Musixmatch scrape failed: {e}")
-        return None
+            return None
 
     def get_lyrics(
         self,
@@ -294,7 +324,6 @@ class LyricLocate:
             return cached
 
         if language == 'en':
-            # First, attempt to get the original lyrics and check if they are in English
             original_lyrics = self.get_lyrics(title, artist, 'original', should_cache)
             if original_lyrics and original_lyrics != "Lyrics not found":
                 if self.is_lyrics_in_english(original_lyrics):
@@ -304,7 +333,6 @@ class LyricLocate:
                 else:
                     logger.info("Original lyrics not in English. Searching for translation.")
 
-        # Search for lyrics in the specified language
         genius_url = self.find_genius_url(title, artist, language)
         lyrics = self.scrape_lyrics(genius_url) if genius_url else None
 
@@ -313,7 +341,6 @@ class LyricLocate:
 
         if lyrics and lyrics != "Lyrics not found":
             if language == 'en':
-                # Verify the lyrics are in English before caching as 'en'
                 if self.is_lyrics_in_english(lyrics):
                     if should_cache:
                         self.save_to_cache(title, artist, lyrics, 'en')
@@ -322,17 +349,14 @@ class LyricLocate:
                     logger.info("Fetched lyrics are not in English. Not caching under 'en'.")
                     return "Lyrics not found"
             else:
-                # Cache original lyrics regardless of language
                 if should_cache:
                     self.save_to_cache(title, artist, lyrics, 'original')
-                    # If the original lyrics are in English, also cache them under 'en'
                     if self.is_lyrics_in_english(lyrics):
                         self.save_to_cache(title, artist, lyrics, 'en')
                 return lyrics
 
-        # Skip Musixmatch for English search if specified
-        if lyrics is None and (language != 'en' or 'musixmatch' not in self.skip_services_for_en):
-            lyrics = self.scrape_musixmatch(title, artist)
+        if lyrics is None:
+            lyrics = self.scrape_musixmatch(title, artist, language)
 
         if lyrics and lyrics != "Lyrics not found":
             if language == 'en':
