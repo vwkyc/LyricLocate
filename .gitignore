@@ -9,6 +9,7 @@ misc/*.html
 misc/*.csv
 legacy.py
 test.py
+tests/
 
 # C extensions
 *.so
