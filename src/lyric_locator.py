@@ -304,6 +304,7 @@ class LyricLocate:
                         except requests.RequestException as e:
                             logger.error(f"Error fetching lyrics from {lyrics_url}: {e}")
                             continue
+                        break
             return None
         except requests.RequestException as e:
             logger.error(f"Musixmatch scrape failed: {e}")
