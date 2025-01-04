@@ -6,9 +6,11 @@ import requests
 from difflib import SequenceMatcher
 from typing import Optional
 from bs4 import BeautifulSoup
+from urllib.parse import unquote
+# local imports
 from database import LyricsDatabase
 from spotify_handler import SpotifyHandler
-from urllib.parse import unquote
+from transliteration import transliterate_arabic
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +72,31 @@ class LyricLocate:
     def is_match(self, extracted_artist: str, extracted_title: str, expected_artist: str, expected_title: str) -> bool:
         logger.info(f"Comparing '{extracted_artist}', '{extracted_title}' with '{expected_artist}', '{expected_title}'")
 
+        # Try matching without transliteration first
+        if self._try_match(extracted_artist, extracted_title, expected_artist, expected_title, use_transliteration=False):
+            return True
+
+        # If no match and text contains non-ASCII, try with transliteration
+        if (not extracted_title.isascii() or not extracted_artist.isascii() or 
+            not expected_title.isascii() or not expected_artist.isascii()):
+            return self._try_match(extracted_artist, extracted_title, expected_artist, expected_title, use_transliteration=True)
+
+        return False
+
+    def _try_match(self, extracted_artist: str, extracted_title: str, expected_artist: str, expected_title: str, use_transliteration: bool) -> bool:
         if "(instrumental)" in extracted_title.lower():
             logger.info("Ignoring instrumental version.")
             return False
+
+        if use_transliteration:
+            if not extracted_title.isascii():
+                extracted_title = transliterate_arabic(extracted_title)
+            if not extracted_artist.isascii():
+                extracted_artist = transliterate_arabic(extracted_artist)
+            if not expected_title.isascii():
+                expected_title = transliterate_arabic(expected_title)
+            if not expected_artist.isascii():
+                expected_artist = transliterate_arabic(expected_artist)
 
         query_artists = self.clean_artists(expected_artist)
         query_title = self.clean_title(expected_title)
@@ -293,10 +317,14 @@ class LyricLocate:
                             if title_element:
                                 page_title = title_element.get_text().lower()
                                 search_title = title.lower()
-                                title_ratio = SequenceMatcher(None, page_title, search_title).ratio()
-                                logger.info(f"Title match ratio: {title_ratio}")
                                 
-                                if title_ratio > 0.6:
+                                # Transliterate if necessary
+                                if not page_title.isascii():
+                                    page_title = transliterate_arabic(page_title)
+                                if not artist.isascii():
+                                    artist = transliterate_arabic(artist)
+                                
+                                if self.is_match(extracted_artist=artist, extracted_title=page_title, expected_artist=artist, expected_title=search_title):
                                     lyrics_spans = lyrics_soup.select('.css-175oi2r.r-zd98yo')
                                     if lyrics_spans:
                                         lyrics = "\n".join(span.get_text(separator="\n").strip() for span in lyrics_spans)
